@@ -1,6 +1,10 @@
+import { copyJsonValue } from "./JsonValue.mjs";
+
 const TOOL_RESULT_VERSION = "1";
 const TOOL_RESULT_MAX_CHARS = 1500;
 const ERROR_MESSAGE_MAX_CHARS = 160;
+const TOOL_RESULT_MAX_DEPTH = 16;
+const TOOL_RESULT_MAX_NODES = 4096;
 
 const TOOL_ERROR_CODE = Object.freeze({
     COLLABORATION_DISABLED: "COLLABORATION_DISABLED",
@@ -68,59 +72,6 @@ const ERROR_DEFINITIONS = Object.freeze({
     [TOOL_ERROR_CODE.INTERNAL_ERROR]: defineError("CyberChef could not complete the tool request.", true, false),
 });
 
-const FORBIDDEN_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-
-/**
- * Rejects values that JSON would omit, coerce, or execute while serializing.
- *
- * @param {*} value - Candidate result value.
- * @param {WeakSet<Object>} ancestors - Objects in the current traversal path.
- */
-function assertJsonSafe(value, ancestors) {
-    if (value === null || typeof value === "string" || typeof value === "boolean") return;
-
-    if (typeof value === "number") {
-        if (!Number.isFinite(value)) throw new TypeError("Non-finite numbers are not JSON-safe");
-        return;
-    }
-
-    if (typeof value !== "object") {
-        throw new TypeError("Unsupported tool result value");
-    }
-
-    if (ancestors.has(value)) throw new TypeError("Cyclic tool result");
-    ancestors.add(value);
-
-    if (Array.isArray(value)) {
-        if (Reflect.ownKeys(value).length !== value.length + 1 || Object.keys(value).length !== value.length) {
-            throw new TypeError("Sparse or extended arrays are not JSON-safe");
-        }
-
-        for (const item of value) assertJsonSafe(item, ancestors);
-        ancestors.delete(value);
-        return;
-    }
-
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-        throw new TypeError("Class instances are not JSON-safe tool results");
-    }
-
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    for (const key of Reflect.ownKeys(descriptors)) {
-        const descriptor = descriptors[key];
-        if (typeof key !== "string" || FORBIDDEN_OBJECT_KEYS.has(key) ||
-            !descriptor.enumerable || !("value" in descriptor)) {
-            throw new TypeError("Unsupported tool result property");
-        }
-        assertJsonSafe(descriptor.value, ancestors);
-    }
-
-    ancestors.delete(value);
-}
-
-
 /**
  * Builds a fixed error result without accepting dynamic error text.
  *
@@ -153,20 +104,19 @@ function buildErrorResult(code) {
  * @returns {Object} A bounded tool result.
  */
 function finalizeToolResult(result) {
-    let serialized;
+    let copy;
 
     try {
-        assertJsonSafe(result, new WeakSet());
-        serialized = JSON.stringify(result);
+        copy = copyJsonValue(result, TOOL_RESULT_MAX_DEPTH, TOOL_RESULT_MAX_NODES);
     } catch (err) {
         return buildErrorResult(TOOL_ERROR_CODE.INTERNAL_ERROR);
     }
 
-    if (serialized.length > TOOL_RESULT_MAX_CHARS) {
+    if (copy.serialized.length > TOOL_RESULT_MAX_CHARS) {
         return buildErrorResult(TOOL_ERROR_CODE.RESULT_TOO_LARGE);
     }
 
-    return JSON.parse(serialized);
+    return copy.value;
 }
 
 

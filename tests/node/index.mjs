@@ -30,6 +30,7 @@ import "./tests/lib/ChartsProtocolPrototypePollution.mjs";
 import "./tests/ParseQRCode.mjs";
 import "./tests/WebpackConfig.mjs";
 import "./tests/WebMCPWaiter.mjs";
+import "./tests/WebMCPToolInput.mjs";
 import "./tests/WebMCPToolResult.mjs";
 
 const testStatus = {
