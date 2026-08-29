@@ -29,6 +29,7 @@ import "./tests/lib/BigIntUtils.mjs";
 import "./tests/lib/ChartsProtocolPrototypePollution.mjs";
 import "./tests/ParseQRCode.mjs";
 import "./tests/WebpackConfig.mjs";
+import "./tests/WebMCPWaiter.mjs";
 
 const testStatus = {
     allTestsPassing: true,
