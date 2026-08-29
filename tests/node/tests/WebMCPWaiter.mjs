@@ -1,7 +1,10 @@
 import assert from "assert";
-import WebMCPWaiter, {
-    WEBMCP_PROBE_TOOL_NAME,
-} from "../../../src/web/waiters/WebMCPWaiter.mjs";
+import WebMCPWaiter from "../../../src/web/waiters/WebMCPWaiter.mjs";
+import {
+    READINESS_TOOL_CONTRACT,
+    READINESS_TOOL_NAME,
+} from "../../../src/web/webmcp/ToolDefinitions.mjs";
+import { TOOL_ERROR_CODE } from "../../../src/web/webmcp/ToolResult.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
@@ -31,20 +34,41 @@ TestRegister.addApiTests([
         await waiter.registerProbeTool();
 
         assert.equal(registrations.length, 1);
-        assert.equal(registrations[0].tool.name, WEBMCP_PROBE_TOOL_NAME);
-        assert.equal(registrations[0].tool.annotations.readOnlyHint, true);
-        assert.equal(registrations[0].tool.annotations.untrustedContentHint, false);
+        assert.equal(registrations[0].tool.name, READINESS_TOOL_NAME);
+        assert.equal(registrations[0].tool.title, READINESS_TOOL_CONTRACT.title);
+        assert.equal(registrations[0].tool.description, READINESS_TOOL_CONTRACT.description);
+        assert.strictEqual(registrations[0].tool.inputSchema, READINESS_TOOL_CONTRACT.inputSchema);
+        assert.strictEqual(registrations[0].tool.annotations, READINESS_TOOL_CONTRACT.annotations);
         assert.equal(registrations[0].options.signal.aborted, false);
         assert.equal(waiter.registrationState, "registered");
 
         const result = await registrations[0].tool.execute({});
 
         assert.deepStrictEqual(result, {
+            version: "1",
             ok: true,
-            code: "WEBMCP_PROVIDER_READY",
-            provider: "CyberChef",
-            tool: WEBMCP_PROBE_TOOL_NAME,
+            data: {
+                code: "WEBMCP_PROVIDER_READY",
+                provider: "CyberChef",
+                tool: READINESS_TOOL_NAME,
+            },
         });
+    }),
+
+    it("WebMCPWaiter: should reject invalid probe input through the shared boundary", async () => {
+        let registeredTool;
+        const modelContext = {
+                registerTool: async tool => {
+                    registeredTool = tool;
+                },
+            },
+            waiter = new WebMCPWaiter(modelContext, new EventTarget(), new EventTarget());
+
+        await waiter.registerProbeTool();
+        const result = await registeredTool.execute({unexpected: "SECRET_CANARY"});
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);
+        assert.equal(JSON.stringify(result).includes("SECRET_CANARY"), false);
     }),
 
     it("WebMCPWaiter: should separate registration and invocation cancellation", async () => {

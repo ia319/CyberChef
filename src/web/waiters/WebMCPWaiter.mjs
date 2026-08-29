@@ -1,17 +1,10 @@
+import { executeTool } from "../webmcp/ToolExecutor.mjs";
+import {
+    READINESS_TOOL_CONTRACT,
+    READINESS_TOOL_NAME,
+} from "../webmcp/ToolDefinitions.mjs";
+
 const PROBE_DELAY_MS = 100;
-
-const WEBMCP_PROBE_TOOL_NAME = "cyberchef_webmcp_probe";
-
-const EMPTY_INPUT_SCHEMA = Object.freeze({
-    type: "object",
-    properties: Object.freeze({}),
-    additionalProperties: false,
-});
-
-const READ_ONLY_ANNOTATIONS = Object.freeze({
-    readOnlyHint: true,
-    untrustedContentHint: false,
-});
 
 
 /**
@@ -40,14 +33,20 @@ class WebMCPWaiter {
         this.handleAppLoaded = this.registerProbeTool.bind(this);
         this.handlePageHide = this.unregisterProbeTool.bind(this);
         this.handlePageShow = this.restoreAfterBFCache.bind(this);
+        this.executeProbe = this.executeProbe.bind(this);
 
         this.probeTool = Object.freeze({
-            name: WEBMCP_PROBE_TOOL_NAME,
-            title: "Check CyberChef WebMCP",
-            description: "Check that the CyberChef WebMCP provider can receive a tool call. Returns fixed readiness data and does not read or modify the workspace.",
-            inputSchema: EMPTY_INPUT_SCHEMA,
-            annotations: READ_ONLY_ANNOTATIONS,
-            execute: this.executeProbe.bind(this),
+            name: READINESS_TOOL_NAME,
+            title: READINESS_TOOL_CONTRACT.title,
+            description: READINESS_TOOL_CONTRACT.description,
+            inputSchema: READINESS_TOOL_CONTRACT.inputSchema,
+            annotations: READINESS_TOOL_CONTRACT.annotations,
+            execute: (input, options) => executeTool(
+                READINESS_TOOL_CONTRACT,
+                this.executeProbe,
+                input,
+                options
+            ),
         });
     }
 
@@ -150,15 +149,11 @@ class WebMCPWaiter {
     /**
      * Returns fixed readiness data while preserving the invocation cancellation boundary.
      *
-     * @param {Object} input - Empty probe input.
-     * @param {ToolExecuteCallbackOptions|undefined} options - Browser invocation options.
-     * @returns {Promise<Object>} Fixed, JSON-safe provider readiness data.
+     * @param {Object} input - Validated empty probe input.
+     * @param {AbortSignal|undefined} signal - Browser invocation signal.
+     * @returns {Promise<Object>} Fixed provider readiness data for the shared result boundary.
      */
-    async executeProbe(input, options) {
-        const signal = options && options.signal;
-
-        if (signal) signal.throwIfAborted();
-
+    async executeProbe(input, signal) {
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 if (signal) signal.removeEventListener("abort", handleAbort);
@@ -174,16 +169,13 @@ class WebMCPWaiter {
         });
 
         return {
-            ok: true,
-            code: "WEBMCP_PROVIDER_READY",
-            provider: "CyberChef",
-            tool: WEBMCP_PROBE_TOOL_NAME,
+            data: {
+                code: "WEBMCP_PROVIDER_READY",
+                provider: "CyberChef",
+                tool: READINESS_TOOL_NAME,
+            },
         };
     }
 }
-
-export {
-    WEBMCP_PROBE_TOOL_NAME,
-};
 
 export default WebMCPWaiter;
