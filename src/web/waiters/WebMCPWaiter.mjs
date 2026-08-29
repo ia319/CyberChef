@@ -53,9 +53,7 @@ class WebMCPWaiter {
 
 
     /**
-     * Connects provider registration to the completed application and page lifecycle.
-     *
-     * @returns {void}
+     * Connects provider registration to application and page lifecycle events.
      */
     setup() {
         if (this.listenersRegistered) return;
@@ -68,7 +66,7 @@ class WebMCPWaiter {
 
 
     /**
-     * Registers the fixed WP-00 probe once for the current page lifecycle.
+     * Registers the fixed readiness probe once for the current page lifecycle.
      *
      * @returns {Promise<string>} The resulting provider registration state.
      */
@@ -126,8 +124,6 @@ class WebMCPWaiter {
 
     /**
      * Aborts the registration so the browser unregisters the probe tool.
-     *
-     * @returns {void}
      */
     unregisterProbeTool() {
         if (this.registrationController) {
@@ -145,7 +141,6 @@ class WebMCPWaiter {
      * Restores the static provider after a BFCache page restoration.
      *
      * @param {PageTransitionEvent|Event} event - Browser pageshow event.
-     * @returns {void}
      */
     restoreAfterBFCache(event) {
         if (event.persisted) this.registerProbeTool();
@@ -158,7 +153,6 @@ class WebMCPWaiter {
      * @param {Object} input - Empty probe input.
      * @param {ToolExecuteCallbackOptions|undefined} options - Browser invocation options.
      * @returns {Promise<Object>} Fixed, JSON-safe provider readiness data.
-     * @throws {Error} When the host aborts the invocation signal.
      */
     async executeProbe(input, options) {
         const signal = options && options.signal;
