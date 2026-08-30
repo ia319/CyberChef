@@ -13,6 +13,10 @@ import it from "../assertionHandler.mjs";
 
 const operation = (op, args=[], options={}) => ({op, args, ...options});
 const projectedStep = (stepId, config) => ({stepId, operation: config});
+const ALLOW_AGENT_PATCH_POLICY = Object.freeze({
+    prepareChanges: changes => changes,
+    authorizePatch: () => {},
+});
 
 
 /**
@@ -93,9 +97,14 @@ TestRegister.addApiTests([
                 changes: [
                     {type: "setArgument", stepId: stepIds[0], argumentIndex: 0, value: "A-Za-z0-9-_"},
                     {type: "move", stepId: stepIds[1], beforeStepId: stepIds[0]},
-                    {type: "insert", operation: "To Hex", afterStepId: stepIds[0]},
+                    {
+                        type: "insert",
+                        operation: "To Hex",
+                        arguments: ["Space", 0],
+                        afterStepId: stepIds[0],
+                    },
                 ],
-            });
+            }, ALLOW_AGENT_PATCH_POLICY);
 
         assert.equal(result.status, RECIPE_TRANSACTION_STATUS.COMMITTED);
         assert.equal(result.recipeRevision, 2);
@@ -137,7 +146,7 @@ TestRegister.addApiTests([
         assert.equal(adapter.getState().rollbackCount, 0);
     }),
 
-    it("RecipeTransaction: should reject stale and forged Agent inputs before projection", () => {
+    it("RecipeTransaction: should reject stale and incomplete Agent requests before projection", () => {
         const {model, stepIds} = createModel([operation("From Hex", ["Auto"])]),
             adapter = createProjectionAdapter(model.getSnapshot().steps),
             transaction = new RecipeTransaction(model, adapter);
@@ -145,12 +154,10 @@ TestRegister.addApiTests([
         assertTransactionError(() => transaction.applyAgentPatch({
             expectedRevision: 0,
             changes: [{type: "disable", stepId: stepIds[0]}],
-        }), RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
+        }, ALLOW_AGENT_PATCH_POLICY), RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
         assertTransactionError(() => transaction.applyAgentPatch({
             expectedRevision: 1,
             changes: [{type: "disable", stepId: stepIds[0]}],
-            actor: "user",
-            source: "revert",
         }), RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH);
         assert.equal(model.getSnapshot().recipeRevision, 1);
         assert.equal(adapter.getState().prepareCount, 0);
@@ -164,17 +171,27 @@ TestRegister.addApiTests([
             adapter = createProjectionAdapter(model.getSnapshot().steps),
             transaction = new RecipeTransaction(model, adapter);
 
+        const rejectingPolicy = Object.freeze({
+            prepareChanges: changes => changes,
+            authorizePatch: patch => {
+                throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED, {
+                    commandIndex: patch.actions[0].commandIndex,
+                    policyCode: "TEST_POLICY_BLOCKED",
+                });
+            },
+        });
+
         assertTransactionError(() => transaction.applyAgentPatch({
             expectedRevision: 1,
             changes: [{type: "enable", stepId: stepIds[0]}],
-        }), RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED, 0);
+        }, rejectingPolicy), RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED, 0);
         assert.equal(model.getSnapshot().recipeRevision, 1);
         assert.equal(adapter.getState().prepareCount, 0);
 
         const result = transaction.applyAgentPatch({
             expectedRevision: 1,
             changes: [{type: "remove", stepId: stepIds[0]}],
-        });
+        }, ALLOW_AGENT_PATCH_POLICY);
         assert.equal(result.status, RECIPE_TRANSACTION_STATUS.COMMITTED);
         assert.deepStrictEqual(model.exportConfig(), [operation("To Base64", ["A-Za-z0-9+/="])]);
     }),
@@ -188,8 +205,8 @@ TestRegister.addApiTests([
 
         assertTransactionError(() => transaction.applyAgentPatch({
             expectedRevision: 1,
-            changes: [{type: "insert", operation: "To Hex"}],
-        }), RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
+            changes: [{type: "insert", operation: "To Hex", arguments: ["Space", 0]}],
+        }, ALLOW_AGENT_PATCH_POLICY), RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
         assert.equal(model.getSnapshot().recipeRevision, before.recipeRevision);
         assert.strictEqual(model.getSnapshot().steps, before.steps);
         assert.strictEqual(adapter.getState().visibleSteps, before.steps);
@@ -198,8 +215,8 @@ TestRegister.addApiTests([
         faults.prepare = false;
         const result = transaction.applyAgentPatch({
             expectedRevision: 1,
-            changes: [{type: "insert", operation: "To Hex"}],
-        });
+            changes: [{type: "insert", operation: "To Hex", arguments: ["Space", 0]}],
+        }, ALLOW_AGENT_PATCH_POLICY);
         assert.deepStrictEqual(result.insertedSteps, [{commandIndex: 0, stepId: "transaction-step-1"}]);
     }),
 
@@ -212,7 +229,7 @@ TestRegister.addApiTests([
         assertTransactionError(() => transaction.applyAgentPatch({
             expectedRevision: 1,
             changes: [{type: "disable", stepId: stepIds[0]}],
-        }), RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
+        }, ALLOW_AGENT_PATCH_POLICY), RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
         assert.equal(model.getSnapshot().recipeRevision, before.recipeRevision);
         assert.strictEqual(model.getSnapshot().steps, before.steps);
         assert.strictEqual(adapter.getState().visibleSteps, before.steps);
@@ -228,7 +245,7 @@ TestRegister.addApiTests([
             result = transaction.applyAgentPatch({
                 expectedRevision: 1,
                 changes: [{type: "disable", stepId: stepIds[0]}],
-            });
+            }, ALLOW_AGENT_PATCH_POLICY);
 
         assert.equal(result.status, RECIPE_TRANSACTION_STATUS.UNCHANGED);
         assert.equal(result.recipeRevision, 1);
@@ -282,7 +299,7 @@ TestRegister.addApiTests([
             agentResult = transaction.applyAgentPatch({
                 expectedRevision: 1,
                 changes: [{type: "disable", stepId: stepIds[0]}],
-            }),
+            }, ALLOW_AGENT_PATCH_POLICY),
             available = transaction.getAgentRevertState(),
             revertResult = transaction.revertAgentPatch();
 
@@ -314,7 +331,7 @@ TestRegister.addApiTests([
         transaction.applyAgentPatch({
             expectedRevision: 1,
             changes: [{type: "disable", stepId: stepIds[0]}],
-        });
+        }, ALLOW_AGENT_PATCH_POLICY);
         transaction.commitUserProjection([
             projectedStep(stepIds[0], operation("From Hex", ["Auto"], {disabled: true, breakpoint: true})),
         ], RECIPE_TRANSACTION_SOURCE.BREAKPOINT);
@@ -338,7 +355,7 @@ TestRegister.addApiTests([
         transaction.applyAgentPatch({
             expectedRevision: 1,
             changes: [{type: "disable", stepId: stepIds[0]}],
-        });
+        }, ALLOW_AGENT_PATCH_POLICY);
         const before = model.getSnapshot();
         faults.prepare = true;
 

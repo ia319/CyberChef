@@ -21,6 +21,7 @@ import TimingWaiter from "./waiters/TimingWaiter.mjs";
 import WebMCPWaiter from "./waiters/WebMCPWaiter.mjs";
 import CollaborationWaiter from "./waiters/CollaborationWaiter.mjs";
 import {ACTIVE_BUILD_PROFILE} from "./webmcp/BuildProfiles.mjs";
+import {AGENT_RECIPE_PATCH_POLICY} from "./webmcp/AgentRecipePatchPolicy.mjs";
 import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
 import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
 
@@ -69,7 +70,7 @@ class Manager {
         this.worker      = new WorkerWaiter(this.app, this);
         this.window      = new WindowWaiter(this.app);
         this.controls    = new ControlsWaiter(this.app, this);
-        this.recipe      = new RecipeWaiter(this.app, this);
+        this.recipe      = new RecipeWaiter(this.app, this, AGENT_RECIPE_PATCH_POLICY);
         this.ops         = new OperationsWaiter(this.app, this);
         this.tabs        = new TabWaiter(this.app, this);
         this.input       = new InputWaiter(this.app, this);

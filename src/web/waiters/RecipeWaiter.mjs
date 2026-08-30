@@ -30,10 +30,16 @@ class RecipeWaiter {
      *
      * @param {App} app - The main view object for CyberChef.
      * @param {Manager} manager - The CyberChef event manager.
+     * @param {Object} agentPatchPolicy - Synchronous Agent patch policy.
      */
-    constructor(app, manager) {
+    constructor(app, manager, agentPatchPolicy) {
+        if (!agentPatchPolicy || typeof agentPatchPolicy.prepareChanges !== "function" ||
+            typeof agentPatchPolicy.authorizePatch !== "function") {
+            throw new TypeError("RecipeWaiter requires an Agent patch policy");
+        }
         this.app = app;
         this.manager = manager;
+        this.agentPatchPolicy = agentPatchPolicy;
         this.removeIntent = false;
         this.model = new RecipeModel();
         this.modelSyncDepth = 0;
@@ -512,7 +518,7 @@ class RecipeWaiter {
     /**
      * Applies an authorized Agent patch to the visible Recipe.
      *
-     * @param {*} input - Raw apply_recipe_patch input.
+     * @param {Object} input - Detached Agent patch request.
      * @returns {Object} Bounded transaction result.
      */
     applyAgentPatch(input) {
@@ -520,7 +526,7 @@ class RecipeWaiter {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
         }
 
-        const result = this.transaction.applyAgentPatch(input);
+        const result = this.transaction.applyAgentPatch(input, this.agentPatchPolicy);
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
             this.app.agentRecipeTransactionCommitted(result.change);
             this.adjustWidth();

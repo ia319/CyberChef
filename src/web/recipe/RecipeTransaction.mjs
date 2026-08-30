@@ -3,14 +3,6 @@ import {
     RecipePatchError,
     applyRecipePatch,
 } from "./RecipePatch.mjs";
-import {evaluateOperationMutation} from "../webmcp/OperationPermissions.mjs";
-import {preflightOperationRecipe} from "../webmcp/OperationPreflight.mjs";
-import {
-    getOperationProfile,
-    resolveOperationProfileArguments,
-} from "../webmcp/OperationProfiles.mjs";
-import {TOOL_CONTRACTS, TOOL_NAME} from "../webmcp/ToolDefinitions.mjs";
-import {validateToolInput} from "../webmcp/ToolInput.mjs";
 
 const RECIPE_TRANSACTION_ACTOR = Object.freeze({
     AGENT: "agent",
@@ -75,9 +67,6 @@ const RECIPE_REVERT_REASON = Object.freeze({
     RECIPE_CHANGED: "RECIPE_CHANGED",
 });
 
-const APPLY_RECIPE_PATCH_SCHEMA = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH].inputSchema;
-
-
 /**
  * Represents a bounded Recipe transaction failure without workspace values.
  */
@@ -96,51 +85,6 @@ class RecipeTransactionError extends Error {
         if (typeof details.patchCode === "string") this.patchCode = details.patchCode;
         if (typeof details.policyCode === "string") this.policyCode = details.policyCode;
     }
-}
-
-
-/**
- * Converts model steps to the Operation policy input shape.
- *
- * @param {Object[]} steps - Prepared Recipe model steps.
- * @returns {Object[]} Complete post-change Recipe for preflight.
- */
-function createPreflightRecipe(steps) {
-    return steps.map(step => ({
-        operationName: step.operation.op,
-        arguments: step.operation.args,
-        disabled: step.operation.disabled === true,
-    }));
-}
-
-
-/**
- * Supplies reviewed defaults for insert commands before the patch engine runs.
- *
- * @param {Object[]} changes - Detached schema-validated commands.
- * @returns {Object[]} Commands with complete insert arguments.
- */
-function normalizeAgentChanges(changes) {
-    return changes.map((change, commandIndex) => {
-        if (change.type !== "insert") return change;
-
-        const profile = getOperationProfile(change.operation);
-        if (!profile) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED, {
-                commandIndex,
-                policyCode: "PROFILE_REQUIRED",
-            });
-        }
-
-        const argumentResult = resolveOperationProfileArguments(profile, change.arguments);
-        if (!argumentResult.valid) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH, {
-                commandIndex,
-                patchCode: argumentResult.code,
-            });
-        }
-        return {...change, arguments: argumentResult.arguments};
-    });
 }
 
 
@@ -408,24 +352,27 @@ class RecipeTransaction {
 
 
     /**
-     * Applies one schema-validated Agent patch as a synchronous transaction.
+     * Applies one authorized Agent patch as a synchronous transaction.
      *
-     * @param {*} input - Raw apply_recipe_patch input.
+     * @param {Object} input - Detached patch request with an expected revision and changes.
+     * @param {Object} policy - Synchronous Agent change preparation and authorization policy.
      * @returns {Object} Immutable transaction result without Recipe arguments.
      * @throws {RecipeTransactionError} When validation, policy, revision, or projection fails.
      */
-    applyAgentPatch(input) {
-        const validation = validateToolInput(input, APPLY_RECIPE_PATCH_SCHEMA);
-        if (!validation.valid) {
+    applyAgentPatch(input, policy) {
+        if (!input || !Number.isSafeInteger(input.expectedRevision) ||
+            !Array.isArray(input.changes) || !policy ||
+            typeof policy.prepareChanges !== "function" ||
+            typeof policy.authorizePatch !== "function") {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH);
         }
 
         const snapshot = this.#model.getSnapshot();
-        if (validation.value.expectedRevision !== snapshot.recipeRevision) {
+        if (input.expectedRevision !== snapshot.recipeRevision) {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
         }
 
-        const changes = normalizeAgentChanges(validation.value.changes),
+        const changes = policy.prepareChanges(input.changes),
             usedStepIds = new Set(snapshot.steps.map(step => step.stepId));
         let patch,
             draftStepNumber = this.#nextStepNumber;
@@ -452,18 +399,9 @@ class RecipeTransaction {
             throw err;
         }
 
-        const postflight = preflightOperationRecipe(createPreflightRecipe(patch.steps));
-        for (const action of patch.actions) {
-            const decision = evaluateOperationMutation(action.type, action.operationName, postflight);
-            if (!decision.allowed) {
-                throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED, {
-                    commandIndex: action.commandIndex,
-                    policyCode: decision.code,
-                });
-            }
-        }
+        policy.authorizePatch(patch);
 
-        if (this.#model.getSnapshot().recipeRevision !== validation.value.expectedRevision) {
+        if (this.#model.getSnapshot().recipeRevision !== input.expectedRevision) {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
         }
 

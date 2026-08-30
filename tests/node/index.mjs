@@ -41,6 +41,7 @@ import "./tests/WebMCPWaiter.mjs";
 import "./tests/WebMCPToolDefinitions.mjs";
 import "./tests/WebMCPOperationCatalog.mjs";
 import "./tests/WebMCPOperationToolHandlers.mjs";
+import "./tests/WebMCPAgentRecipePatchPolicy.mjs";
 import "./tests/WebMCPRecipeToolHandlers.mjs";
 import "./tests/WebMCPOperationCapabilityManifest.mjs";
 import "./tests/WebMCPOperationIngredients.mjs";

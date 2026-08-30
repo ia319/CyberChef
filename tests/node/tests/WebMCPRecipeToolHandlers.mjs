@@ -26,6 +26,8 @@ const DATA_CANARIES = Object.freeze([
     "SECRET_REGISTER_CANARY",
     "SECRET_FILENAME_CANARY",
     "SECRET_ERROR_CANARY",
+    "SECRET_MAGIC_PREVIEW_CANARY",
+    "SECRET_CANDIDATE_PARAMETER_CANARY",
 ]);
 
 const createProjection = (recipeRevision=7, stepCount=2) => ({
@@ -43,6 +45,8 @@ const createProjection = (recipeRevision=7, stepCount=2) => ({
         ],
         commentText: DATA_CANARIES[3],
         register: DATA_CANARIES[4],
+        magicPreview: DATA_CANARIES[7],
+        candidateParameters: [DATA_CANARIES[8]],
         filename: DATA_CANARIES[5],
         error: DATA_CANARIES[6],
     })),
