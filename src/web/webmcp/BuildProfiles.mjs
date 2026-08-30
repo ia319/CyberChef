@@ -46,19 +46,19 @@ const BUILD_PROFILES = {
         name: PROFILE_NAME.RECIPE,
         toolNames: FORMAL_TOOL_NAMES.slice(0, 4),
         stateFields: RECIPE_STATE_FIELDS,
-        authorizationText: "Allows an Agent to read bounded Recipe structure and apply visible Recipe changes. Tool results contain catalog metadata, Recipe structure, and mutation status.",
+        authorizationText: "Allows WebMCP tools to search Operations, read redacted Recipe structure, and apply visible Recipe changes. WebMCP changes do not run automatically; the user runs Bake to check results.",
     },
     [PROFILE_NAME.RUN]: {
         name: PROFILE_NAME.RUN,
         toolNames: FORMAL_TOOL_NAMES.slice(0, 5),
         stateFields: RUN_STATE_FIELDS,
-        authorizationText: "Allows an Agent to change and run the visible Recipe. Tool results contain catalog metadata, Recipe structure, mutation status, and run status.",
+        authorizationText: "Allows WebMCP tools to search Operations, read and change redacted Recipe structure, and request a run for the active Input. The visible Output remains available for user review.",
     },
     [PROFILE_NAME.ANALYSIS]: {
         name: PROFILE_NAME.ANALYSIS,
         toolNames: FORMAL_TOOL_NAMES,
         stateFields: ANALYSIS_STATE_FIELDS,
-        authorizationText: "Allows an Agent to change and run the visible Recipe and receive bounded Output-derived signals. Tool results contain catalog metadata, Recipe structure, mutation status, run status, and derived analysis.",
+        authorizationText: "Allows WebMCP tools to search Operations, read and change redacted Recipe structure, request a run for the active Input, and receive bounded Output-derived analysis. The visible Output remains available for user review.",
     },
 };
 

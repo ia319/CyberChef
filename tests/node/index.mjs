@@ -36,6 +36,7 @@ import "./tests/WorkerActionPolicy.mjs";
 import "./tests/ParseQRCode.mjs";
 import "./tests/WebpackConfig.mjs";
 import "./tests/WebMCPCollaborationSession.mjs";
+import "./tests/WebMCPCollaborationUI.mjs";
 import "./tests/WebMCPWaiter.mjs";
 import "./tests/WebMCPToolDefinitions.mjs";
 import "./tests/WebMCPOperationCatalog.mjs";

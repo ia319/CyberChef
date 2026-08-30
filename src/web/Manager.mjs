@@ -19,6 +19,7 @@ import BackgroundWorkerWaiter from "./waiters/BackgroundWorkerWaiter.mjs";
 import TabWaiter from "./waiters/TabWaiter.mjs";
 import TimingWaiter from "./waiters/TimingWaiter.mjs";
 import WebMCPWaiter from "./waiters/WebMCPWaiter.mjs";
+import CollaborationWaiter from "./waiters/CollaborationWaiter.mjs";
 
 
 /**
@@ -76,6 +77,11 @@ class Manager {
         this.bindings    = new BindingsWaiter(this.app, this);
         this.background  = new BackgroundWorkerWaiter(this.app, this);
         this.webmcp      = new WebMCPWaiter(document.modelContext, document, window);
+        this.collaboration = new CollaborationWaiter(
+            this,
+            this.webmcp.session,
+            this.webmcp.buildProfile
+        );
 
         // Object to store dynamic handlers to fire on elements that may not exist yet
         this.dynamicHandlers = {};
@@ -98,6 +104,7 @@ class Manager {
         this.background.registerChefWorker();
         this.seasonal.load();
         this.webmcp.setup();
+        this.collaboration.setup();
 
         this.confirmWaitersLoaded();
     }

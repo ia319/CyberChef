@@ -24,6 +24,16 @@
 
     "prod": {
       "launch_url": "http://localhost:8000/index.html"
+    },
+
+    "webmcp": {
+      "launch_url": "http://localhost:8000/index.html",
+      "desiredCapabilities": {
+        "browserName": "chrome",
+        "goog:chromeOptions": {
+          "args": ["--enable-features=WebMCPTesting"]
+        }
+      }
     }
 
   }
