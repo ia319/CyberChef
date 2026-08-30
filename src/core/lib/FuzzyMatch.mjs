@@ -139,7 +139,7 @@ function fuzzyMatchRecursive(
                 patternCurIndex,
                 strCurrIndex + 1,
                 matches,
-                recursiveMatches,
+                [],
                 maxMatches,
                 nextMatch,
                 recursionCount,
