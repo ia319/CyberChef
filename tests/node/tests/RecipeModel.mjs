@@ -140,4 +140,54 @@ TestRegister.addApiTests([
         suppliedId = "contains spaces";
         assert.throws(() => model.allocateStepId(), TypeError);
     }),
+
+    it("RecipeModel: should prepare a projection without changing current state", () => {
+        const model = new RecipeModel(),
+            existingId = model.allocateStepId();
+        model.commitProjectedSteps([projectedStep(existingId, operation("From Hex"))]);
+
+        const prepared = model.prepareProjectedSteps([
+            projectedStep(existingId, operation("To Hex")),
+            projectedStep("agent-step", operation("From Base64")),
+        ], ["agent-step"]);
+
+        assert.equal(prepared.expectedRevision, 1);
+        assert.equal(prepared.recipeRevision, 2);
+        assert.equal(prepared.changed, true);
+        assert.deepStrictEqual(model.exportConfig(), [operation("From Hex")]);
+        assert.equal(model.getSnapshot().recipeRevision, 1);
+
+        assert.deepStrictEqual(model.commitPreparedProjection(prepared), {
+            changed: true,
+            recipeRevision: 2,
+        });
+        assert.deepStrictEqual(model.exportConfig(), [operation("To Hex"), operation("From Base64")]);
+        assert.throws(() => model.commitPreparedProjection(prepared), TypeError);
+        assert.deepStrictEqual(model.commitProjectedSteps([
+            projectedStep(existingId, operation("To Hex")),
+            projectedStep("agent-step", operation("From Base64")),
+        ]), {changed: false, recipeRevision: 2});
+    }),
+
+    it("RecipeModel: should reject stale and invalid prepared projections", () => {
+        const model = new RecipeModel(),
+            stepId = model.allocateStepId();
+        model.commitProjectedSteps([projectedStep(stepId, operation("From Hex"))]);
+
+        const stale = model.prepareProjectedSteps([
+            projectedStep(stepId, operation("To Hex")),
+        ]);
+        model.commitProjectedSteps([projectedStep(stepId, operation("From Base64"))]);
+
+        assert.throws(() => model.commitPreparedProjection(stale), RangeError);
+        assert.deepStrictEqual(model.exportConfig(), [operation("From Base64")]);
+        assert.throws(() => model.commitPreparedProjection({}), TypeError);
+        assert.throws(() => model.prepareProjectedSteps([
+            projectedStep("missing", operation("To Hex")),
+        ]), TypeError);
+        assert.throws(() => model.prepareProjectedSteps([
+            projectedStep("unused", operation("To Hex")),
+        ], ["unused", "not-present"]), TypeError);
+        assert.equal(model.getSnapshot().recipeRevision, 2);
+    }),
 ]);

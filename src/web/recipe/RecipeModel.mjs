@@ -102,6 +102,18 @@ function recipeValuesEqual(left, right) {
 
 
 /**
+ * Checks one page-lifetime Recipe step identifier.
+ *
+ * @param {*} stepId - Candidate Recipe step identifier.
+ * @returns {boolean} Whether the identifier is valid.
+ */
+function isValidStepId(stepId) {
+    return typeof stepId === "string" && stepId.length > 0 &&
+        stepId.length <= MAX_STEP_ID_LENGTH && STEP_ID_PATTERN.test(stepId);
+}
+
+
+/**
  * Stores Recipe semantics separately from their visible DOM projection.
  */
 class RecipeModel {
@@ -110,6 +122,7 @@ class RecipeModel {
     #nextStepNumber;
     #allocatedStepIds;
     #stepIdFactory;
+    #preparedProjections;
 
     /**
      * Creates an empty page-lifetime Recipe model.
@@ -126,6 +139,7 @@ class RecipeModel {
         this.#nextStepNumber = 0;
         this.#allocatedStepIds = new Set();
         this.#stepIdFactory = stepIdFactory ?? (() => `recipe-step-${++this.#nextStepNumber}`);
+        this.#preparedProjections = new WeakMap();
     }
 
 
@@ -136,8 +150,7 @@ class RecipeModel {
      */
     allocateStepId() {
         const stepId = this.#stepIdFactory();
-        if (typeof stepId !== "string" || stepId.length < 1 ||
-            stepId.length > MAX_STEP_ID_LENGTH || !STEP_ID_PATTERN.test(stepId)) {
+        if (!isValidStepId(stepId)) {
             throw new TypeError("Recipe step ID is invalid");
         }
         if (this.#allocatedStepIds.has(stepId)) {
@@ -149,26 +162,40 @@ class RecipeModel {
 
 
     /**
-     * Commits a complete projected Recipe and advances revision once when semantics changed.
+     * Validates a complete projection without changing the current Recipe.
      *
      * @param {Object[]} projectedSteps - Ordered runtime identities and Operation configurations.
-     * @returns {Object} Immutable commit result.
+     * @param {string[]} [newStepIds=[]] - New identities introduced by this projection.
+     * @returns {Object} Immutable one-use prepared projection.
      */
-    commitProjectedSteps(projectedSteps) {
+    prepareProjectedSteps(projectedSteps, newStepIds=[]) {
         if (!Array.isArray(projectedSteps)) {
             throw new TypeError("Projected Recipe steps must be an array");
         }
+        if (!Array.isArray(newStepIds)) {
+            throw new TypeError("New Recipe step IDs must be an array");
+        }
 
-        const stepIds = new Set(),
+        const suppliedNewStepIds = new Set();
+        for (const stepId of newStepIds) {
+            if (!isValidStepId(stepId)) throw new TypeError("New Recipe step ID is invalid");
+            if (this.#allocatedStepIds.has(stepId) || suppliedNewStepIds.has(stepId)) {
+                throw new RangeError("New Recipe step ID has already been allocated");
+            }
+            suppliedNewStepIds.add(stepId);
+        }
+
+        const projectedStepIds = new Set(),
             normalizedSteps = projectedSteps.map(step => {
                 if (!step || typeof step !== "object" || Array.isArray(step) ||
-                    typeof step.stepId !== "string" || !this.#allocatedStepIds.has(step.stepId)) {
+                    !isValidStepId(step.stepId) ||
+                    !this.#allocatedStepIds.has(step.stepId) && !suppliedNewStepIds.has(step.stepId)) {
                     throw new TypeError("Projected Recipe step is invalid");
                 }
-                if (stepIds.has(step.stepId)) {
+                if (projectedStepIds.has(step.stepId)) {
                     throw new RangeError("Projected Recipe contains a duplicate step ID");
                 }
-                stepIds.add(step.stepId);
+                projectedStepIds.add(step.stepId);
                 return Object.freeze({
                     stepId: step.stepId,
                     operation: normalizeOperationConfig(step.operation),
@@ -178,16 +205,65 @@ class RecipeModel {
                 normalizedSteps.some((step, index) => step.stepId !== this.#steps[index].stepId ||
                     !recipeValuesEqual(step.operation, this.#steps[index].operation));
 
-        if (!changed) {
-            return Object.freeze({changed: false, recipeRevision: this.#recipeRevision});
+        for (const stepId of suppliedNewStepIds) {
+            if (!projectedStepIds.has(stepId)) {
+                throw new TypeError("New Recipe step ID is not present in the projection");
+            }
         }
-        if (this.#recipeRevision === Number.MAX_SAFE_INTEGER) {
+        if (changed && this.#recipeRevision === Number.MAX_SAFE_INTEGER) {
             throw new RangeError("Recipe revision limit reached");
         }
 
-        this.#steps = Object.freeze(normalizedSteps);
+        const prepared = Object.freeze({
+            changed,
+            expectedRevision: this.#recipeRevision,
+            recipeRevision: changed ? this.#recipeRevision + 1 : this.#recipeRevision,
+            steps: Object.freeze(normalizedSteps),
+        });
+        this.#preparedProjections.set(prepared, {
+            changed,
+            expectedRevision: this.#recipeRevision,
+            newStepIds: suppliedNewStepIds,
+            steps: prepared.steps,
+        });
+        return prepared;
+    }
+
+
+    /**
+     * Publishes a prepared projection exactly once at its original revision.
+     *
+     * @param {Object} prepared - Value returned by prepareProjectedSteps().
+     * @returns {Object} Immutable commit result.
+     */
+    commitPreparedProjection(prepared) {
+        const projection = prepared && typeof prepared === "object" ?
+            this.#preparedProjections.get(prepared) : null;
+        if (!projection) throw new TypeError("Prepared Recipe projection is invalid or already used");
+        this.#preparedProjections.delete(prepared);
+
+        if (projection.expectedRevision !== this.#recipeRevision) {
+            throw new RangeError("Prepared Recipe projection is stale");
+        }
+        if (!projection.changed) {
+            return Object.freeze({changed: false, recipeRevision: this.#recipeRevision});
+        }
+
+        this.#steps = projection.steps;
+        for (const stepId of projection.newStepIds) this.#allocatedStepIds.add(stepId);
         this.#recipeRevision++;
         return Object.freeze({changed: true, recipeRevision: this.#recipeRevision});
+    }
+
+
+    /**
+     * Commits a complete projected Recipe and advances revision once when semantics changed.
+     *
+     * @param {Object[]} projectedSteps - Ordered allocated identities and Operation configurations.
+     * @returns {Object} Immutable commit result.
+     */
+    commitProjectedSteps(projectedSteps) {
+        return this.commitPreparedProjection(this.prepareProjectedSteps(projectedSteps));
     }
 
 
