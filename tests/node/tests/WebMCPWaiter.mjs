@@ -41,7 +41,12 @@ TestRegister.addApiTests([
                 registerTool: async (tool, options) => registrations.push({tool, options}),
             },
             documentTarget = new EventTarget(),
-            waiter = new WebMCPWaiter(modelContext, documentTarget, new EventTarget());
+            waiter = new WebMCPWaiter(
+                modelContext,
+                documentTarget,
+                new EventTarget(),
+                BUILD_PROFILES[PROFILE_NAME.READINESS]
+            );
 
         waiter.setup();
         waiter.setup();
@@ -78,7 +83,12 @@ TestRegister.addApiTests([
                     registeredTool = tool;
                 },
             },
-            waiter = new WebMCPWaiter(modelContext, new EventTarget(), new EventTarget());
+            waiter = new WebMCPWaiter(
+                modelContext,
+                new EventTarget(),
+                new EventTarget(),
+                BUILD_PROFILES[PROFILE_NAME.READINESS]
+            );
 
         await waiter.registerTools();
         const result = await registeredTool.execute({unexpected: "SECRET_CANARY"});
@@ -96,7 +106,12 @@ TestRegister.addApiTests([
                     registrationSignal = options.signal;
                 },
             },
-            waiter = new WebMCPWaiter(modelContext, new EventTarget(), new EventTarget()),
+            waiter = new WebMCPWaiter(
+                modelContext,
+                new EventTarget(),
+                new EventTarget(),
+                BUILD_PROFILES[PROFILE_NAME.READINESS]
+            ),
             invocationController = new AbortController();
 
         await waiter.registerTools();
@@ -122,7 +137,12 @@ TestRegister.addApiTests([
                 registerTool: async (tool, options) => registrationSignals.push(options.signal),
             },
             lifecycleTarget = new EventTarget(),
-            waiter = new WebMCPWaiter(modelContext, new EventTarget(), lifecycleTarget);
+            waiter = new WebMCPWaiter(
+                modelContext,
+                new EventTarget(),
+                lifecycleTarget,
+                BUILD_PROFILES[PROFILE_NAME.READINESS]
+            );
 
         waiter.setup();
         await waiter.registerTools();

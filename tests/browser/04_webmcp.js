@@ -4,22 +4,6 @@
  * @license Apache-2.0
  */
 
-const RECIPE_PROFILE = Object.freeze({
-    name: "recipe",
-    toolNames: Object.freeze([
-        "search_operations",
-        "get_operation_details",
-        "get_recipe_state",
-        "apply_recipe_patch",
-    ]),
-    stateFields: Object.freeze([
-        "sessionEpoch",
-        "recipeRevision",
-        "executionCapability",
-    ]),
-    authorizationText: "Allows WebMCP tools to search Operations, read redacted Recipe structure, and apply visible Recipe changes. WebMCP changes do not run automatically; the user runs Bake to check results.",
-});
-
 let initialSessionState;
 
 
@@ -29,26 +13,46 @@ module.exports = {
             .resizeWindow(1280, 1000)
             .url(browser.launchUrl)
             .useCss()
-            .waitForElementNotPresent("#preloader", 10000);
+            .waitForElementNotPresent("#preloader", 10000)
+            .execute(() => {
+                window.__invokeWebMCPTool = async (tool, input) => {
+                    let result;
+                    try {
+                        result = await document.modelContext.executeTool(
+                            tool,
+                            JSON.stringify(input)
+                        );
+                    } catch (err) {
+                        if (!(err instanceof TypeError)) throw err;
+                        result = await document.modelContext.executeTool(tool, input);
+                    }
+                    return typeof result === "string" ? JSON.parse(result) : result;
+                };
+            });
     },
 
     "Recipe access exposes explicit and accessible controls": browser => {
-        browser.execute(profile => {
-            const collaboration = window.app.manager.collaboration,
-                initiallyHidden = document.getElementById("webmcp-collaboration").hidden;
-
-            collaboration.buildProfile = profile;
-            collaboration.setup();
-
-            return {
-                providerAvailable: Boolean(document.modelContext),
-                initiallyHidden,
-                url: window.location.href,
-                storageKeys: Object.keys(window.localStorage),
-            };
-        }, [RECIPE_PROFILE], ({value}) => {
+        browser.execute(() => ({
+            providerAvailable: Boolean(document.modelContext),
+            getToolsAvailable: typeof document.modelContext?.getTools === "function",
+            executeToolAvailable: typeof document.modelContext?.executeTool === "function",
+            panelHidden: document.getElementById("webmcp-collaboration").hidden,
+            profileName: window.app.manager.webmcp.buildProfile.name,
+            toolNames: window.app.manager.webmcp.buildProfile.toolNames,
+            url: window.location.href,
+            storageKeys: Object.keys(window.localStorage),
+        }), [], ({value}) => {
             browser.assert.strictEqual(value.providerAvailable, true);
-            browser.assert.strictEqual(value.initiallyHidden, true);
+            browser.assert.strictEqual(value.getToolsAvailable, true);
+            browser.assert.strictEqual(value.executeToolAvailable, true);
+            browser.assert.strictEqual(value.panelHidden, false);
+            browser.assert.strictEqual(value.profileName, "recipe");
+            browser.assert.deepStrictEqual(value.toolNames, [
+                "search_operations",
+                "get_operation_details",
+                "get_recipe_state",
+                "apply_recipe_patch",
+            ]);
             initialSessionState = value;
         });
 
@@ -89,26 +93,86 @@ module.exports = {
         });
     },
 
-    "Recipe access shows, retains, and restores an Agent change": browser => {
-        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
-        browser.execute(() => {
-            const recipe = window.app.manager.recipe;
-
-            window.app.setRecipeConfig([]);
-            const before = recipe.getReadProjection(),
-                result = recipe.applyAgentPatch({
-                    expectedRevision: before.recipeRevision,
-                    changes: [{type: "insert", operation: "To Base64"}],
-                });
-
-            return {
-                result,
-                config: recipe.getConfig(),
-                panelText: document.getElementById("webmcp-collaboration").textContent,
-            };
+    "Recipe tools support a real discovery and collaboration flow": browser => {
+        browser.executeAsync(async done => {
+            try {
+                const tools = await document.modelContext.getTools(),
+                    names = tools.map(tool => tool.name),
+                    searchTool = tools.find(tool => tool.name === "search_operations"),
+                    detailsTool = tools.find(tool => tool.name === "get_operation_details"),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    search = await window.__invokeWebMCPTool(searchTool, {
+                        query: "base64",
+                        limit: 2,
+                        offset: 0,
+                    }),
+                    details = await window.__invokeWebMCPTool(detailsTool, {
+                        name: "To Base64",
+                        argumentOffset: 0,
+                        argumentLimit: 1,
+                        optionOffset: 0,
+                        optionLimit: 2,
+                    }),
+                    protectedState = await window.__invokeWebMCPTool(stateTool, {});
+                done({names, search, details, protectedState});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
         }, [], ({value}) => {
-            browser.assert.strictEqual(value.result.status, "committed");
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.deepStrictEqual(value.names, [
+                "apply_recipe_patch",
+                "get_operation_details",
+                "get_recipe_state",
+                "search_operations",
+            ]);
+            browser.assert.strictEqual(value.search.ok, true);
+            browser.assert.strictEqual(value.search.data.items[0].name, "To Base64");
+            browser.assert.strictEqual(value.details.ok, true);
+            browser.assert.strictEqual(value.details.data.name, "To Base64");
+            browser.assert.strictEqual(value.details.data.arguments.length, 1);
+            browser.assert.strictEqual(
+                value.protectedState.error.code,
+                "COLLABORATION_DISABLED"
+            );
+        });
+
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            try {
+                window.app.setRecipeConfig([]);
+                const tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    patchTool = tools.find(tool => tool.name === "apply_recipe_patch"),
+                    state = await window.__invokeWebMCPTool(stateTool, {}),
+                    bakeIdBefore = window.app.manager.worker.bakeId,
+                    patch = await window.__invokeWebMCPTool(patchTool, {
+                        expectedRevision: state.state.recipeRevision,
+                        changes: [{type: "insert", operation: "To Base64"}],
+                    });
+
+                window.__webmcpBakeIdBefore = bakeIdBefore;
+                done({
+                    state,
+                    patch,
+                    bakeIdBefore,
+                    bakeIdAfterPatch: window.app.manager.worker.bakeId,
+                    config: window.app.manager.recipe.getConfig(),
+                    panelText: document.getElementById("webmcp-collaboration").textContent,
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.state.ok, true);
+            browser.assert.strictEqual(value.state.state.executionCapability, "USER_BAKE_REQUIRED");
+            browser.assert.strictEqual(value.patch.ok, true);
+            browser.assert.strictEqual(value.patch.data.status, "committed");
+            browser.assert.strictEqual(value.patch.data.insertedSteps.stepIds.length, 1);
+            browser.assert.strictEqual(value.bakeIdAfterPatch, value.bakeIdBefore);
             browser.assert.strictEqual(value.config.length, 1);
+            browser.assert.strictEqual(JSON.stringify(value.patch).includes("A-Za-z0-9+/="), false);
             browser.assert.strictEqual(value.panelText.includes("A-Za-z0-9+/="), false);
         });
 
@@ -119,13 +183,13 @@ module.exports = {
         browser.expect.element(".webmcp-step-badge").text.to.equal("WebMCP change");
         browser.expect.element("#webmcp-revert").to.be.enabled;
 
-        browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
-        browser.execute(() => window.app.manager.recipe.getConfig(), [], ({value}) => {
-            browser.assert.strictEqual(value.length, 1);
-            browser.assert.strictEqual(value[0].op, "To Base64");
+        browser.click("#bake").pause(100).execute(() => ({
+            bakeIdBefore: window.__webmcpBakeIdBefore,
+            bakeIdAfter: window.app.manager.worker.bakeId,
+        }), [], ({value}) => {
+            browser.assert.strictEqual(value.bakeIdAfter > value.bakeIdBefore, true);
         });
 
-        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
         browser.sendKeys("#webmcp-revert", browser.Keys.ENTER);
         browser.expect.element("#webmcp-revert").to.not.be.enabled;
         browser.expect.element(".webmcp-step-badge").to.not.be.present;
@@ -140,20 +204,68 @@ module.exports = {
             browser.assert.deepStrictEqual(value.config, []);
         });
 
-        browser.execute(() => {
-            const recipe = window.app.manager.recipe,
-                before = recipe.getReadProjection();
-            recipe.applyAgentPatch({
-                expectedRevision: before.recipeRevision,
-                changes: [{type: "insert", operation: "From Hex"}],
-            });
-            document.querySelector("#rec-list .disable-icon").click();
+        browser.executeAsync(async done => {
+            try {
+                const tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    patchTool = tools.find(tool => tool.name === "apply_recipe_patch"),
+                    state = await window.__invokeWebMCPTool(stateTool, {}),
+                    patch = await window.__invokeWebMCPTool(patchTool, {
+                        expectedRevision: state.state.recipeRevision,
+                        changes: [{type: "insert", operation: "From Hex"}],
+                    }),
+                    stepId = patch.data.insertedSteps.stepIds[0];
+
+                document.querySelector(`[data-recipe-step-id="${stepId}"] .disable-icon`).click();
+                const afterUserEdit = window.app.manager.recipe.getReadProjection(),
+                    configBeforeStale = window.app.manager.recipe.getConfig(),
+                    stale = await window.__invokeWebMCPTool(patchTool, {
+                        expectedRevision: patch.state.recipeRevision,
+                        changes: [{type: "remove", stepId}],
+                    }),
+                    afterStale = window.app.manager.recipe.getReadProjection();
+
+                done({
+                    patch,
+                    stale,
+                    userRevision: afterUserEdit.recipeRevision,
+                    finalRevision: afterStale.recipeRevision,
+                    configUnchanged: JSON.stringify(configBeforeStale) ===
+                        JSON.stringify(window.app.manager.recipe.getConfig()),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.patch.ok, true);
+            browser.assert.strictEqual(value.stale.error.code, "STALE_RECIPE");
+            browser.assert.strictEqual(value.finalRevision, value.userRevision);
+            browser.assert.strictEqual(value.configUnchanged, true);
         });
         browser.expect.element("#webmcp-revert").to.not.be.enabled;
         browser.expect.element(".webmcp-step-badge").to.not.be.present;
         browser.expect.element("#webmcp-revert-state").text.to.contain(
             "Recipe changed after the WebMCP change"
         );
+
+        browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            try {
+                const tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    state = await window.__invokeWebMCPTool(stateTool, {});
+                done({state, config: window.app.manager.recipe.getConfig()});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.state.error.code, "COLLABORATION_DISABLED");
+            browser.assert.strictEqual(value.config.length, 1);
+            browser.assert.strictEqual(value.config[0].op, "From Hex");
+            browser.assert.strictEqual(value.config[0].disabled, true);
+        });
     },
 
     after: browser => {

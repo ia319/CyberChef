@@ -232,7 +232,7 @@ class CollaborationWaiter {
             const badge = document.createElement("span");
             badge.className = "webmcp-step-badge";
             badge.textContent = "WebMCP change";
-            operation.querySelector(".op-title")?.append(" ", badge);
+            operation.querySelector(".op-title")?.after(badge);
         }
 
         this.revertButton.disabled = !revertState.available;

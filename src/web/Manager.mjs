@@ -20,6 +20,9 @@ import TabWaiter from "./waiters/TabWaiter.mjs";
 import TimingWaiter from "./waiters/TimingWaiter.mjs";
 import WebMCPWaiter from "./waiters/WebMCPWaiter.mjs";
 import CollaborationWaiter from "./waiters/CollaborationWaiter.mjs";
+import {ACTIVE_BUILD_PROFILE} from "./webmcp/BuildProfiles.mjs";
+import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
+import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
 
 
 /**
@@ -76,7 +79,16 @@ class Manager {
         this.seasonal    = new SeasonalWaiter(this.app, this);
         this.bindings    = new BindingsWaiter(this.app, this);
         this.background  = new BackgroundWorkerWaiter(this.app, this);
-        this.webmcp      = new WebMCPWaiter(document.modelContext, document, window);
+        this.webmcp      = new WebMCPWaiter(
+            document.modelContext,
+            document,
+            window,
+            ACTIVE_BUILD_PROFILE,
+            {
+                ...OPERATION_TOOL_HANDLERS,
+                ...createRecipeToolHandlers(this.recipe),
+            }
+        );
         this.collaboration = new CollaborationWaiter(
             this,
             this.webmcp.session,

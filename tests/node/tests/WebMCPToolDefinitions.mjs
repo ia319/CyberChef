@@ -161,10 +161,14 @@ TestRegister.addApiTests([
         assertDeeplyFrozen(BUILD_PROFILES);
     }),
 
-    it("WebMCPToolDefinitions: should expose only the implemented readiness capability", () => {
-        assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.READINESS);
-        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, [READINESS_TOOL_NAME]);
-        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.stateFields, []);
+    it("WebMCPToolDefinitions: should expose the complete Recipe collaboration capability", () => {
+        assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.RECIPE);
+        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, FORMAL_TOOL_NAMES.slice(0, 4));
+        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.stateFields, [
+            "sessionEpoch",
+            "recipeRevision",
+            "executionCapability",
+        ]);
     }),
 
 ]);
