@@ -40,18 +40,19 @@ const NO_EVIDENCE = Object.freeze([]);
 
 
 /**
- * Creates one explicitly denied policy record with fixed audit evidence.
+ * Creates one blocked policy record with fixed audit evidence.
  *
  * @param {string} operationName - Exact Operation name.
+ * @param {string} reviewStatus - Review status for the known risk record.
  * @param {Object} capabilities - Confirmed capability values.
  * @param {string[]} riskCodes - Stable reasons for blocking Agent actions.
  * @param {string[]} evidence - Repository evidence for the decision.
- * @returns {Object} Denied policy record.
+ * @returns {Object} Blocked policy record.
  */
-function deniedPolicy(operationName, capabilities, riskCodes, evidence) {
+function blockedPolicy(operationName, reviewStatus, capabilities, riskCodes, evidence) {
     return Object.freeze({
         operationName,
-        reviewStatus: REVIEW_STATUS.DENIED,
+        reviewStatus,
         capabilities: Object.freeze({...capabilities}),
         riskCodes: Object.freeze([...riskCodes]),
         evidence: Object.freeze([...evidence]),
@@ -85,19 +86,19 @@ function allowedPolicy(profile) {
 }
 
 const DENIED_OPERATION_POLICIES = Object.freeze([
-    deniedPolicy("HTTP request", {
+    blockedPolicy("HTTP request", REVIEW_STATUS.DENIED, {
         network: true,
         nondeterministic: true,
     }, ["NETWORK_REQUEST", "INPUT_TO_REQUEST_BODY"], [
         "src/core/operations/HTTPRequest.mjs",
     ]),
-    deniedPolicy("DNS over HTTPS", {
+    blockedPolicy("DNS over HTTPS", REVIEW_STATUS.DENIED, {
         network: true,
         nondeterministic: true,
     }, ["NETWORK_REQUEST", "INPUT_TO_QUERY"], [
         "src/core/operations/DNSOverHTTPS.mjs",
     ]),
-    deniedPolicy("Magic", {
+    blockedPolicy("Magic", REVIEW_STATUS.DENIED, {
         fanOut: true,
         highCost: true,
         regexProbe: true,
@@ -106,33 +107,33 @@ const DENIED_OPERATION_POLICIES = Object.freeze([
         "src/core/operations/Magic.mjs",
         "src/core/lib/Magic.mjs",
     ]),
-    deniedPolicy("Parse colour code", {
+    blockedPolicy("Parse colour code", REVIEW_STATUS.DENIED, {
         pageMutation: true,
         scriptExecution: true,
     }, ["SCRIPT_PRESENTATION", "PAGE_MUTATION"], [
         "src/core/operations/ParseColourCode.mjs",
     ]),
-    deniedPolicy("Render Markdown", {
+    blockedPolicy("Render Markdown", REVIEW_STATUS.DENIED, {
         externalNavigation: true,
         remoteResource: true,
     }, ["REMOTE_RESOURCE", "EXTERNAL_NAVIGATION"], [
         "src/core/operations/RenderMarkdown.mjs",
     ]),
-    deniedPolicy("Render PDF", {}, ["EMBEDDED_DOCUMENT"], [
+    blockedPolicy("Render PDF", REVIEW_STATUS.DENIED, {}, ["EMBEDDED_DOCUMENT"], [
         "src/core/operations/RenderPDF.mjs",
     ]),
-    deniedPolicy("Scatter chart", {
+    blockedPolicy("Scatter chart", REVIEW_STATUS.DENIED, {
         remoteResource: true,
     }, ["REMOTE_SVG_PAINT"], [
         "src/core/operations/ScatterChart.mjs",
         "src/core/lib/Charts.mjs",
     ]),
-    deniedPolicy("Series chart", {
+    blockedPolicy("Series chart", REVIEW_STATUS.DENIED, {
         remoteResource: true,
     }, ["REMOTE_SVG_PAINT"], [
         "src/core/operations/SeriesChart.mjs",
     ]),
-    deniedPolicy("Show on map", {
+    blockedPolicy("Show on map", REVIEW_STATUS.DENIED, {
         network: true,
         pageMutation: true,
         remoteResource: true,
@@ -142,8 +143,31 @@ const DENIED_OPERATION_POLICIES = Object.freeze([
     ]),
 ]);
 
+const KNOWN_RISK_OPERATION_POLICIES = Object.freeze([
+    blockedPolicy("Register", REVIEW_STATUS.UNREVIEWED, {
+        dataToArgument: true,
+        regexProbe: true,
+    }, ["DATA_TO_ARGUMENT", "REGEX_PROBE"], [
+        "src/core/operations/Register.mjs",
+    ]),
+    blockedPolicy("Power Set", REVIEW_STATUS.UNREVIEWED, {
+        fanOut: true,
+        highCost: true,
+    }, ["FAN_OUT", "RESOURCE_AMPLIFICATION"], [
+        "src/core/operations/PowerSet.mjs",
+    ]),
+    blockedPolicy("Unzip", REVIEW_STATUS.UNREVIEWED, {
+        decompression: true,
+        fanOut: true,
+    }, ["DECOMPRESSION", "FILE_ARTIFACT", "FAN_OUT"], [
+        "src/core/operations/Unzip.mjs",
+        "src/core/Utils.mjs",
+    ]),
+]);
+
 const REVIEWED_OPERATION_POLICIES = Object.freeze([
     ...DENIED_OPERATION_POLICIES,
+    ...KNOWN_RISK_OPERATION_POLICIES,
     ...GOLDEN_OPERATION_PROFILES.map(allowedPolicy),
 ]);
 

@@ -54,14 +54,22 @@ TestRegister.addApiTests([
 
     it("WebMCPOperationCapabilityManifest: should preserve known structural capabilities", () => {
         const unzip = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Unzip"),
-            magic = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Magic");
+            magic = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Magic"),
+            powerSet = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Power Set"),
+            register = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Register");
 
         assert.equal(unzip.coreOutputType, "List<File>");
         assert.equal(unzip.presentType, "html");
+        assert.equal(unzip.decompression, true);
+        assert.equal(unzip.fanOut, true);
         assert.equal(unzip.fileArtifact, true);
         assert.equal(unzip.htmlPresentation, true);
         assert.equal(magic.flowControl, true);
         assert.equal(magic.scriptExecution, true);
+        assert.equal(powerSet.fanOut, true);
+        assert.equal(powerSet.highCost, true);
+        assert.equal(register.dataToArgument, true);
+        assert.equal(register.regexProbe, true);
     }),
 
     it("WebMCPOperationCapabilityManifest: should expose all capability fields", () => {
