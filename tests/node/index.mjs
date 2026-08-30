@@ -35,6 +35,7 @@ import "./tests/WebMCPWaiter.mjs";
 import "./tests/WebMCPToolDefinitions.mjs";
 import "./tests/WebMCPOperationCatalog.mjs";
 import "./tests/WebMCPOperationCapabilityManifest.mjs";
+import "./tests/WebMCPOperationIngredients.mjs";
 import "./tests/WebMCPToolExecutor.mjs";
 import "./tests/WebMCPToolInput.mjs";
 import "./tests/WebMCPToolResult.mjs";

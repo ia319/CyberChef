@@ -1,60 +1,14 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
 import { fuzzyMatch } from "../../core/lib/FuzzyMatch.mjs";
+import {
+    OPERATION_DESCRIPTION_MAX_CODE_POINTS,
+    sanitizeOperationDescription,
+} from "./CatalogText.mjs";
+import { describeOperationIngredients } from "./OperationIngredients.mjs";
 
-const OPERATION_DESCRIPTION_MAX_CODE_POINTS = 240;
 const OPERATION_SEARCH_DEFAULT_LIMIT = 5;
 const OPERATION_SEARCH_MAX_LIMIT = 10;
 const OPERATION_SEARCH_MAX_QUERY_CODE_POINTS = 128;
-
-const HTML_ENTITY_VALUES = Object.freeze({
-    amp: "&",
-    apos: "'",
-    gt: ">",
-    lt: "<",
-    nbsp: " ",
-    quot: "\"",
-});
-
-
-/**
- * Decodes the HTML entities used by Operation descriptions without a DOM.
- *
- * @param {string} value - Text containing named or numeric HTML entities.
- * @returns {string} Text with supported entities decoded.
- */
-function decodeHtmlEntities(value) {
-    return value.replace(/&(?:#(\d+)|#x([\da-f]+)|([a-z]+));/giu, (entity, decimal, hexadecimal, named) => {
-        if (named) return HTML_ENTITY_VALUES[named.toLowerCase()] ?? entity;
-
-        const codePoint = Number.parseInt(decimal ?? hexadecimal, decimal ? 10 : 16);
-        if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff ||
-            codePoint >= 0xd800 && codePoint <= 0xdfff) {
-            return "";
-        }
-        return String.fromCodePoint(codePoint);
-    });
-}
-
-
-/**
- * Converts fixed Operation HTML descriptions into bounded plain text.
- *
- * @param {*} description - Description value from generated configuration.
- * @returns {string} Sanitized description text.
- */
-function sanitizeOperationDescription(description) {
-    const source = typeof description === "string" ? description : "",
-        withoutActiveContent = source
-            .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/giu, " ")
-            .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/giu, " "),
-        plainText = decodeHtmlEntities(withoutActiveContent.replace(/<[^>]*>/gu, " "))
-            .replace(/\s+/gu, " ")
-            .trim(),
-        codePoints = [...plainText];
-
-    if (codePoints.length <= OPERATION_DESCRIPTION_MAX_CODE_POINTS) return plainText;
-    return codePoints.slice(0, OPERATION_DESCRIPTION_MAX_CODE_POINTS - 1).join("") + "…";
-}
 
 
 /**
@@ -79,6 +33,10 @@ function createOperationCatalog(config=OperationConfig) {
             flowControl: operation?.flowControl === true,
         })),
         entriesByName = new Map(entries.map(entry => [entry.name, entry])),
+        ingredientsByName = new Map(Object.entries(config).map(([name, operation]) => [
+            name,
+            Array.isArray(operation?.args) ? operation.args : [],
+        ])),
         names = Object.freeze(entries.map(entry => entry.name));
 
     /**
@@ -98,6 +56,20 @@ function createOperationCatalog(config=OperationConfig) {
      */
     function getOperationNames() {
         return names;
+    }
+
+    /**
+     * Returns bounded static Ingredient descriptors for one exact Operation.
+     *
+     * @param {string} name - Exact Operation name.
+     * @param {number} [optionOffset=0] - Zero-based static option offset.
+     * @param {number} [optionLimit=20] - Maximum options in this page.
+     * @returns {Object|null} Ingredient description page or null.
+     */
+    function getOperationIngredients(name, optionOffset, optionLimit) {
+        const ingredients = ingredientsByName.get(name);
+        if (!ingredients) return null;
+        return describeOperationIngredients(ingredients, optionOffset, optionLimit);
     }
 
     /**
@@ -156,6 +128,7 @@ function createOperationCatalog(config=OperationConfig) {
     return Object.freeze({
         size: entries.length,
         getOperation,
+        getOperationIngredients,
         getOperationNames,
         searchOperations,
     });
