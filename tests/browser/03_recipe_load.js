@@ -398,6 +398,206 @@ module.exports = {
         });
     },
 
+    "Recipe changes discard a running Bake result": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                worker = app.manager.worker;
+            app.manager.controls.setAutoBake(false);
+            app.setRecipeConfig([{op: "Sleep", args: [500]}]);
+            worker.cancelBake(true, false);
+
+            const inputNum = app.manager.tabs.getActiveTab("output"),
+                workerIndex = worker.getInactiveChefWorker(true),
+                output = app.manager.output.outputs[inputNum];
+            window.__staleRecipeRun = {
+                previousOutputBakeId: output.bakeId,
+                previousOutputRecipeRevision: output.recipeRevision,
+                previousOutputData: output.data,
+                previousOutputText: app.manager.output.outputEditorView.state.doc.toString(),
+            };
+            worker.totalOutputs = 1;
+            worker.bake(app.getRecipeConfig(), app.options, 0, false);
+            worker.inputs.push({
+                input: "old Recipe result",
+                inputNum,
+                progress: false,
+            });
+            worker.bakeNextInput(workerIndex);
+        });
+
+        browser.execute(() => {
+            const app = window.app,
+                worker = app.manager.worker,
+                recipe = app.manager.recipe,
+                target = worker.bakeTarget;
+
+            document.querySelector("#rec-list .disable-icon").click();
+            Object.assign(window.__staleRecipeRun, {
+                bakeId: target.bakeId,
+                recipeRevisionAtStart: target.recipeRevisionAtStart,
+                currentRecipeRevision: recipe.getRecipeRevision(),
+            });
+        });
+
+        browser.pause(1000);
+
+        browser.execute(() => {
+            const app = window.app,
+                worker = app.manager.worker,
+                recipe = app.manager.recipe,
+                output = app.manager.output.outputs[app.manager.tabs.getActiveTab("output")],
+                record = window.__staleRecipeRun;
+            return {
+                ...record,
+                finalRecipeRevision: recipe.getRecipeRevision(),
+                outputStatus: output.status,
+                outputBakeId: output.bakeId,
+                outputRecipeRevision: output.recipeRevision,
+                outputDataUnchanged: output.data === record.previousOutputData,
+                outputText: app.manager.output.outputEditorView.state.doc.toString(),
+                staleVisible: !document.getElementById("stale-indicator").classList.contains("hidden"),
+                bakeTarget: worker.bakeTarget,
+                activeRunCount: worker.chefWorkers.filter(item => item.active || item.runTarget).length,
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.currentRecipeRevision, value.recipeRevisionAtStart + 1);
+            browser.assert.strictEqual(value.finalRecipeRevision, value.currentRecipeRevision);
+            browser.assert.strictEqual(value.outputStatus, "stale");
+            browser.assert.strictEqual(value.outputBakeId, value.previousOutputBakeId);
+            browser.assert.strictEqual(
+                value.outputRecipeRevision,
+                value.previousOutputRecipeRevision
+            );
+            browser.assert.strictEqual(value.outputDataUnchanged, true);
+            browser.assert.strictEqual(value.outputText, value.previousOutputText);
+            browser.assert.strictEqual(value.staleVisible, true);
+            browser.assert.strictEqual(value.bakeTarget, null);
+            browser.assert.strictEqual(value.activeRunCount, 0);
+        });
+    },
+
+    "Output render generation rejects a stale presentation": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                outputWaiter = app.manager.output,
+                recipe = app.manager.recipe,
+                inputNum = app.manager.tabs.getActiveTab("output");
+
+            outputWaiter.outputEditorView.dispatch({
+                changes: {
+                    from: 0,
+                    to: outputWaiter.outputEditorView.state.doc.length,
+                    insert: "current display",
+                }
+            });
+            outputWaiter.updateOutputBakeTarget(
+                app.manager.worker.bakeId,
+                recipe.getRecipeRevision(),
+                inputNum
+            );
+            outputWaiter.updateOutputValue({
+                result: "late stale display",
+                type: "string",
+                duration: 0,
+            }, inputNum, false);
+            outputWaiter.updateOutputStatus("baked", inputNum);
+
+            document.querySelector("#rec-list .breakpoint").click();
+            window.__staleOutputRender = {
+                inputNum,
+                currentRecipeRevision: recipe.getRecipeRevision(),
+            };
+        });
+
+        browser.pause(100).execute(() => {
+            const app = window.app,
+                record = window.__staleOutputRender,
+                outputWaiter = app.manager.output;
+            return {
+                outputText: outputWaiter.outputEditorView.state.doc.toString(),
+                outputStatus: outputWaiter.outputs[record.inputNum].status,
+                staleVisible: !document.getElementById("stale-indicator").classList.contains("hidden"),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.outputText, "current display");
+            browser.assert.strictEqual(value.outputStatus, "stale");
+            browser.assert.strictEqual(value.staleVisible, true);
+        });
+
+        browser.execute(() => {
+            const app = window.app,
+                record = window.__staleOutputRender,
+                outputWaiter = app.manager.output;
+            outputWaiter.updateOutputBakeTarget(
+                app.manager.worker.bakeId,
+                record.currentRecipeRevision,
+                record.inputNum
+            );
+            outputWaiter.updateOutputStatus("baked", record.inputNum);
+        });
+
+        browser.pause(100).execute(() => {
+            const app = window.app;
+            return {
+                outputText: app.manager.output.outputEditorView.state.doc.toString(),
+                staleVisible: !document.getElementById("stale-indicator").classList.contains("hidden"),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.outputText, "late stale display");
+            browser.assert.strictEqual(value.staleVisible, false);
+        });
+    },
+
+    "Silent Bake reaches its terminal state": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                worker = app.manager.worker,
+                inputNum = app.manager.tabs.getActiveTab("output");
+            worker.silentBake([{op: "Sleep", args: [50]}]);
+            const workerState = worker.chefWorkers.find(item => item.silentTarget);
+            window.__silentBakeRun = {
+                silentBakeId: workerState?.silentTarget?.silentBakeId ?? null,
+                recipeRevisionAtStart: workerState?.silentTarget?.recipeRevisionAtStart ?? null,
+                output: app.manager.output.outputs[inputNum],
+                outputText: app.manager.output.outputEditorView.state.doc.toString(),
+            };
+            return {
+                active: workerState?.active ?? false,
+                silentBakeId: window.__silentBakeRun.silentBakeId,
+                recipeRevisionAtStart: window.__silentBakeRun.recipeRevisionAtStart,
+                currentRecipeRevision: app.manager.recipe.getRecipeRevision(),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.active, true);
+            browser.assert.notStrictEqual(value.silentBakeId, null);
+            browser.assert.strictEqual(
+                value.recipeRevisionAtStart,
+                value.currentRecipeRevision
+            );
+        });
+
+        browser.pause(300).execute(() => {
+            const app = window.app,
+                worker = app.manager.worker,
+                record = window.__silentBakeRun,
+                inputNum = app.manager.tabs.getActiveTab("output");
+            return {
+                pending: worker.chefWorkers.some(item =>
+                    item.silentTarget?.silentBakeId === record.silentBakeId
+                ),
+                active: worker.chefWorkers.some(item => item.active && item.silentTarget),
+                outputUnchanged: app.manager.output.outputs[inputNum] === record.output,
+                outputText: app.manager.output.outputEditorView.state.doc.toString(),
+                previousOutputText: record.outputText,
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.pending, false);
+            browser.assert.strictEqual(value.active, false);
+            browser.assert.strictEqual(value.outputUnchanged, true);
+            browser.assert.strictEqual(value.outputText, value.previousOutputText);
+        });
+    },
+
     after: browser => {
         browser.end();
     }

@@ -66,6 +66,8 @@ class OutputWaiter {
         };
         // Hold a copy of the currently displayed output so that we don't have to update it unnecessarily
         this.currentOutputCache = null;
+        this.currentOutputCacheGeneration = null;
+        this.outputRenderGeneration = 0;
         this.initEditor();
 
         this.outputs = {};
@@ -155,8 +157,10 @@ class OutputWaiter {
      * Sets the line separator
      * @param {string} eol
      * @param {boolean} [manual=false]
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async eolChange(eol, manual=false) {
+    async eolChange(eol, manual=false, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         const eolVal = eolCodeToSeq[eol];
         if (eolVal === undefined) return;
 
@@ -181,7 +185,8 @@ class OutputWaiter {
         });
 
         // Reset the output so that lines are recalculated, preserving the old EOL values
-        await this.setOutput(this.currentOutputCache, true);
+        await this.setOutput(this.currentOutputCache, true, renderGeneration);
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // Update the URL manually since we aren't firing a statechange event
         this.app.updateURL(true);
     }
@@ -212,8 +217,10 @@ class OutputWaiter {
      * Sets the output character encoding
      * @param {number} chrEncVal
      * @param {boolean} [manual=false]
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async chrEncChange(chrEncVal, manual=false) {
+    async chrEncChange(chrEncVal, manual=false, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         if (typeof chrEncVal !== "number") return;
         const currentEnc = this.getChrEnc();
 
@@ -228,7 +235,8 @@ class OutputWaiter {
 
         if (this.encodingState > 1) {
             // Reset the output, forcing it to re-decode the data with the new character encoding
-            await this.setOutput(this.currentOutputCache, true);
+            await this.setOutput(this.currentOutputCache, true, renderGeneration);
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
             // Update the URL manually since we aren't firing a statechange event
             this.app.updateURL(true);
         } else if (currentEnc !== chrEncVal) {
@@ -273,16 +281,20 @@ class OutputWaiter {
      * Sets the value of the current output
      * @param {string|ArrayBuffer} data
      * @param {boolean} [force=false]
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async setOutput(data, force=false) {
+    async setOutput(data, force=false, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // Don't do anything if the output hasn't changed
-        if (!force && data === this.currentOutputCache) {
+        if (!force && data === this.currentOutputCache &&
+            (renderGeneration === null || renderGeneration === this.currentOutputCacheGeneration)) {
             this.manager.controls.hideStaleIndicator();
             this.toggleLoader(false);
             return;
         }
 
         this.currentOutputCache = data;
+        this.currentOutputCacheGeneration = renderGeneration;
         this.toggleLoader(true);
 
         // Remove class to #output-text to change display settings
@@ -292,8 +304,10 @@ class OutputWaiter {
         const tabNum = this.manager.tabs.getActiveTab("output");
         this.manager.timing.recordTime("outputDecodingStart", tabNum);
         if (data instanceof ArrayBuffer) {
-            await this.detectEncoding(data);
+            await this.detectEncoding(data, renderGeneration);
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
             data = await this.bufferToStr(data);
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         }
         this.manager.timing.recordTime("outputDecodingEnd", tabNum);
 
@@ -322,12 +336,13 @@ class OutputWaiter {
         if (!wrap) this.setWordWrap(wrap);
 
         // Detect suitable EOL sequence
-        this.detectEOLSequence(data);
+        this.detectEOLSequence(data, renderGeneration);
 
         // We use setTimeout here to delay the editor dispatch until the next event cycle,
         // ensuring all async actions have completed before attempting to set the contents
         // of the editor. This is mainly with the above call to setWordWrap() in mind.
         setTimeout(() => {
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
             this.docChanging = true;
             // Insert data into editor, overwriting any previous contents
             this.outputEditorView.dispatch({
@@ -341,6 +356,7 @@ class OutputWaiter {
             // If turning word wrap on, do it after we populate the editor
             if (wrap)
                 setTimeout(() => {
+                    if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
                     this.setWordWrap(wrap);
                 });
         });
@@ -349,14 +365,16 @@ class OutputWaiter {
     /**
      * Sets the value of the current output to a rendered HTML value
      * @param {string} html
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async setHTMLOutput(html) {
+    async setHTMLOutput(html, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
+        await this.setOutput("", true, renderGeneration);
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
+
         this.htmlOutput.html = html;
         this.htmlOutput.changed = true;
-        // This clears the text output, but also fires a View update which
-        // triggers the htmlWidget to render the HTML. We set the force flag
-        // to ensure the loader gets removed and HTML is rendered.
-        await this.setOutput("", true);
+        // The pending editor update observes this HTML state when it renders.
 
         // Turn off drawSelection
         this.outputEditorView.dispatch({
@@ -370,6 +388,7 @@ class OutputWaiter {
         const outputHTML = document.getElementById("output-html");
         const scriptElements = outputHTML ? outputHTML.querySelectorAll("script") : [];
         for (let i = 0; i < scriptElements.length; i++) {
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
             try {
                 eval(scriptElements[i].innerHTML); // eslint-disable-line no-eval
             } catch (err) {
@@ -397,8 +416,10 @@ class OutputWaiter {
      * Checks whether the EOL separator should be updated
      *
      * @param {string} data
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    detectEOLSequence(data) {
+    detectEOLSequence(data, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // If EOL has been fixed, skip this.
         if (this.eolState > 1) return;
         // If data is too long, skip this.
@@ -438,15 +459,17 @@ class OutputWaiter {
 
         // Setting automatically
         this.eolState = 1;
-        this.eolChange(choice);
+        this.eolChange(choice, false, renderGeneration);
     }
 
     /**
      * Checks whether the character encoding should be updated.
      *
      * @param {ArrayBuffer} data
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async detectEncoding(data) {
+    async detectEncoding(data, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // If encoding has been fixed, skip this.
         if (this.encodingState > 1) return;
         // If data is too long, skip this.
@@ -458,12 +481,12 @@ class OutputWaiter {
             case 0: // not UTF8
                 // Set to Raw Bytes
                 this.encodingState = 1;
-                await this.chrEncChange(0, false);
+                await this.chrEncChange(0, false, renderGeneration);
                 break;
             case 2: // UTF8
                 // Set to UTF8
                 this.encodingState = 1;
-                await this.chrEncChange(65001, false);
+                await this.chrEncChange(65001, false, renderGeneration);
                 break;
             case 1: // ASCII
             default:
@@ -530,6 +553,7 @@ class OutputWaiter {
             error: null,
             status: "inactive",
             bakeId: -1,
+            recipeRevision: null,
             progress: false,
             encoding: 0,
             eolSequence: "\u000a"
@@ -621,6 +645,8 @@ class OutputWaiter {
      * Marks every existing Output as older than the current Recipe.
      */
     markRecipeStale() {
+        this.outputRenderGeneration++;
+        this.hideMagicButton();
         for (const [inputNum, output] of Object.entries(this.outputs)) {
             output.status = "stale";
             this.displayTabInfo(inputNum);
@@ -629,14 +655,16 @@ class OutputWaiter {
     }
 
     /**
-     * Updates the stored bake ID for the output in the output array
+     * Updates the stored Bake and Recipe identity for an Output.
      *
      * @param {number} bakeId
+     * @param {number} recipeRevision
      * @param {number} inputNum
      */
-    updateOutputBakeId(bakeId, inputNum) {
+    updateOutputBakeTarget(bakeId, recipeRevision, inputNum) {
         if (!this.outputExists(inputNum)) return;
         this.outputs[inputNum].bakeId = bakeId;
+        this.outputs[inputNum].recipeRevision = recipeRevision;
     }
 
     /**
@@ -664,6 +692,7 @@ class OutputWaiter {
     removeOutput(inputNum) {
         if (!this.outputExists(inputNum)) return;
 
+        this.outputRenderGeneration++;
         delete this.outputs[inputNum];
     }
 
@@ -671,6 +700,7 @@ class OutputWaiter {
      * Removes all output tabs
      */
     removeAllOutputs() {
+        this.outputRenderGeneration++;
         this.outputs = {};
 
         const tabsList = document.getElementById("output-tabs");
@@ -692,6 +722,7 @@ class OutputWaiter {
         inputNum = parseInt(inputNum, 10);
         if (inputNum !== this.manager.tabs.getActiveTab("output") ||
             !this.outputExists(inputNum)) return;
+        const renderGeneration = ++this.outputRenderGeneration;
         this.toggleLoader(true);
 
         return new Promise(async function(resolve, reject) {
@@ -709,9 +740,11 @@ class OutputWaiter {
             // If error, style the tab and handle the error
             // If done, display the output if it's the active tab
             // If inactive, show the last bake value (or blank)
-            if (output.status === "inactive" ||
+            const stale = output.status === "inactive" ||
                 output.status === "stale" ||
-                (output.status === "baked" && output.bakeId < this.manager.worker.bakeId)) {
+                (output.status === "baked" && (output.bakeId < this.manager.worker.bakeId ||
+                    output.recipeRevision !== this.manager.recipe.getRecipeRevision()));
+            if (stale) {
                 this.manager.controls.showStaleIndicator();
             } else {
                 this.manager.controls.hideStaleIndicator();
@@ -731,30 +764,33 @@ class OutputWaiter {
                 this.clearHTMLOutput();
 
                 if (output.error) {
-                    await this.setOutput(output.error);
+                    await this.setOutput(output.error, false, renderGeneration);
                 } else {
-                    await this.setOutput(output.data.result);
+                    await this.setOutput(output.data.result, false, renderGeneration);
                 }
-            } else if (output.status === "baked" || output.status === "inactive") {
+            } else if (output.status === "baked" || output.status === "inactive" ||
+                output.status === "stale") {
                 document.querySelector("#output-loader .loading-msg").textContent = `Loading output ${inputNum}`;
 
                 if (output.data === null) {
                     this.clearHTMLOutput();
-                    await this.setOutput("");
+                    await this.setOutput("", false, renderGeneration);
                     return;
                 }
 
                 switch (output.data.type) {
                     case "html":
-                        await this.setHTMLOutput(output.data.result);
+                        await this.setHTMLOutput(output.data.result, renderGeneration);
                         break;
                     case "ArrayBuffer":
                     case "string":
                     default:
                         this.clearHTMLOutput();
-                        await this.setOutput(output.data.result);
+                        await this.setOutput(output.data.result, false, renderGeneration);
                         break;
                 }
+                if (renderGeneration !== this.outputRenderGeneration) return;
+                if (stale) this.manager.controls.showStaleIndicator();
                 this.manager.timing.recordTime("complete", inputNum);
 
                 // Trigger an update so that the status bar recalculates timings
@@ -956,7 +992,8 @@ class OutputWaiter {
         for (let i = 0; i < inputNums.length; i++) {
             const iNum = inputNums[i];
             if (this.outputs[iNum].status !== "baked" ||
-            this.outputs[iNum].bakeId !== this.manager.worker.bakeId) {
+                this.outputs[iNum].bakeId !== this.manager.worker.bakeId ||
+                this.outputs[iNum].recipeRevision !== this.manager.recipe.getRecipeRevision()) {
                 const continueDownloading = await new Promise(function(resolve, reject) {
                     this.app.confirm(
                         "Incomplete outputs",
@@ -1367,11 +1404,17 @@ class OutputWaiter {
         // Don't display anything if there are no, or only one, tabs
         if (!this.outputExists(inputNum) || Object.keys(this.outputs).length <= 1) return;
 
-        const dish = this.getOutputDish(inputNum);
+        const output = this.outputs[inputNum],
+            outputStatus = output.status,
+            outputBakeId = output.bakeId,
+            outputRecipeRevision = output.recipeRevision,
+            dish = this.getOutputDish(inputNum);
         let tabStr = "";
 
         if (dish !== null) {
-            tabStr = await this.getDishTitle(this.getOutputDish(inputNum), 100);
+            tabStr = await this.getDishTitle(dish, 100);
+            if (this.outputs[inputNum] !== output || output.status !== outputStatus ||
+                output.bakeId !== outputBakeId || output.recipeRevision !== outputRecipeRevision) return;
             tabStr = tabStr.replace(/[\n\r]/g, "");
         }
         this.manager.tabs.updateTabHeader(inputNum, tabStr, "output");
@@ -1394,13 +1437,22 @@ class OutputWaiter {
      */
     async backgroundMagic() {
         this.hideMagicButton();
-        const dish = this.getOutputDish(this.manager.tabs.getActiveTab("output"));
-        if (!this.app.options.autoMagic || dish === null) return;
+        const inputNum = this.manager.tabs.getActiveTab("output"),
+            output = this.outputs[inputNum],
+            dish = this.getOutputDish(inputNum);
+        if (!this.app.options.autoMagic || dish === null || output?.status !== "baked" ||
+            output.recipeRevision !== this.manager.recipe.getRecipeRevision()) return;
+        const bakeId = output.bakeId,
+            recipeRevision = output.recipeRevision;
         const buffer = await this.getDishBuffer(dish);
+        if (this.manager.tabs.getActiveTab("output") !== inputNum || this.outputs[inputNum] !== output ||
+            output.status !== "baked" || output.bakeId !== bakeId ||
+            output.recipeRevision !== recipeRevision ||
+            recipeRevision !== this.manager.recipe.getRecipeRevision()) return;
         const sample = buffer.slice(0, 1000) || "";
 
         if (sample.length || sample.byteLength) {
-            this.manager.background.magic(sample);
+            this.manager.background.magic(sample, recipeRevision);
         }
     }
 

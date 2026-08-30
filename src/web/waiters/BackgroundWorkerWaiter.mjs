@@ -105,8 +105,9 @@ class BackgroundWorkerWaiter {
      * @param {number} progress
      * @param {boolean} step
      * @param {Function} callback
+     * @param {number|null} [recipeRevisionAtStart=null] - Recipe revision associated with the task.
      */
-    bake(input, recipeConfig, options, progress, step, callback) {
+    bake(input, recipeConfig, options, progress, step, callback, recipeRevisionAtStart=null) {
         const id = this.callbackID++;
         this.callbacks[id] = callback;
 
@@ -118,7 +119,9 @@ class BackgroundWorkerWaiter {
                 options: options,
                 progress: progress,
                 step: step,
-                id: id
+                id: id,
+                bakeId: id,
+                recipeRevisionAtStart: recipeRevisionAtStart,
             }
         });
     }
@@ -128,8 +131,9 @@ class BackgroundWorkerWaiter {
      * Asks the Magic operation what it can do with the input data.
      *
      * @param {string|ArrayBuffer} input
+     * @param {number} recipeRevisionAtStart - Recipe revision that produced the sample.
      */
-    magic(input) {
+    magic(input, recipeRevisionAtStart) {
         // If we're still working on the previous bake, cancel it before starting a new one.
         if (this.completedCallback + 1 < this.callbackID) {
             clearTimeout(this.timeout);
@@ -141,7 +145,7 @@ class BackgroundWorkerWaiter {
                 "op": "Magic",
                 "args": [3, false, false]
             }
-        ], {}, 0, false, this.magicComplete);
+        ], {}, 0, false, this.magicComplete, recipeRevisionAtStart);
 
         // Cancel this bake if it takes too long.
         this.timeout = setTimeout(this.cancelBake.bind(this), 3000);
@@ -155,7 +159,8 @@ class BackgroundWorkerWaiter {
      */
     magicComplete(response) {
         log.debug("--- Background Magic Bake complete ---");
-        if (!response || response.error) return;
+        if (!response || response.error ||
+            response.recipeRevisionAtStart !== this.manager.recipe.getRecipeRevision()) return;
 
         this.manager.output.backgroundMagicResult(response.dish.value);
     }

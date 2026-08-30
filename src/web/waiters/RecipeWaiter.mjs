@@ -500,6 +500,16 @@ class RecipeWaiter {
 
 
     /**
+     * Returns the current semantic Recipe revision.
+     *
+     * @returns {number} Recipe revision.
+     */
+    getRecipeRevision() {
+        return this.model.getSnapshot().recipeRevision;
+    }
+
+
+    /**
      * Applies an authorized Agent patch to the visible Recipe.
      *
      * @param {*} input - Raw apply_recipe_patch input.

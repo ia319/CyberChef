@@ -82,7 +82,7 @@ self.addEventListener("message", function(e) {
             self.bakeAllInputs();
             break;
         case "bakeNext":
-            self.bakeInput(r.data.inputNum, r.data.bakeId);
+            self.bakeInput(r.data.inputNum, r.data.bakeId, r.data.recipeRevisionAtStart);
             break;
         case "getLoadProgress":
             self.getLoadProgress(r.data);
@@ -210,8 +210,9 @@ self.bakeAllInputs = function() {
  *
  * @param {number} inputNum
  * @param {number} bakeId
+ * @param {number} recipeRevisionAtStart
  */
-self.bakeInput = function(inputNum, bakeId) {
+self.bakeInput = function(inputNum, bakeId, recipeRevisionAtStart) {
     const inputObj = self.inputs[inputNum];
     if (inputObj === null ||
         inputObj === undefined ||
@@ -221,7 +222,8 @@ self.bakeInput = function(inputNum, bakeId) {
             action: "queueInputError",
             data: {
                 inputNum: inputNum,
-                bakeId: bakeId
+                bakeId: bakeId,
+                recipeRevisionAtStart: recipeRevisionAtStart,
             }
         });
         return;
@@ -232,7 +234,8 @@ self.bakeInput = function(inputNum, bakeId) {
         data: {
             input: inputObj.buffer,
             inputNum: inputNum,
-            bakeId: bakeId
+            bakeId: bakeId,
+            recipeRevisionAtStart: recipeRevisionAtStart,
         }
     });
 };

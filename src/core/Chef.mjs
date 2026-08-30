@@ -104,17 +104,17 @@ class Chef {
      * the recipe, ingredients and dish.
      *
      * @param {Object[]} recipeConfig - The recipe configuration object
-     * @returns {number} The time it took to run the silent bake in milliseconds.
+     * @returns {Promise<number>} The time it took to run the silent bake in milliseconds.
     */
-    silentBake(recipeConfig) {
+    async silentBake(recipeConfig) {
         log.debug("Running silent bake");
 
-        const startTime = Date.now(),
-            recipe = new Recipe(recipeConfig),
-            dish = new Dish();
+        const startTime = Date.now();
 
         try {
-            recipe.execute(dish);
+            const recipe = new Recipe(recipeConfig),
+                dish = new Dish();
+            await recipe.execute(dish);
         } catch (err) {
             // Suppress all errors
         }

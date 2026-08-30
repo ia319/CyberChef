@@ -8,6 +8,13 @@
 import ChefWorker from "worker-loader?inline=no-fallback!../../core/ChefWorker.js";
 import DishWorker from "worker-loader?inline=no-fallback!../workers/DishWorker.mjs";
 import { debounce } from "../../core/Utils.mjs";
+import {
+    WORKER_ACTION,
+    WORKER_ACTION_SCOPE,
+    getWorkerActionPolicy,
+} from "../run/WorkerActionPolicy.mjs";
+
+const MAX_PENDING_HIGHLIGHT_REQUESTS = 64;
 
 /**
  * Waiter to handle conversations with the ChefWorker
@@ -31,8 +38,12 @@ class WorkerWaiter {
         this.totalOutputs = 0;
         this.loadingOutputs = 0;
         this.bakeId = 0;
-        this.callbacks = {};
+        this.bakeTarget = null;
+        this.dishCallbacks = new Map();
         this.callbackID = 0;
+        this.highlightRequests = new Map();
+        this.highlightID = 0;
+        this.silentBakeID = 0;
 
         this.maxWorkers = 1;
         if (navigator.hardwareConcurrency !== undefined &&
@@ -43,7 +54,8 @@ class WorkerWaiter {
         // Store dishWorker action (getDishAs or getDishTitle)
         this.dishWorker = {
             worker: null,
-            currentAction: ""
+            currentAction: "",
+            currentRequestId: null,
         };
         this.dishWorkerQueue = [];
     }
@@ -67,6 +79,7 @@ class WorkerWaiter {
         if (this.dishWorker.worker !== null) {
             this.dishWorker.worker.terminate();
             this.dishWorker.currentAction = "";
+            this.dishWorker.currentRequestId = null;
         }
         log.debug("Adding new DishWorker");
 
@@ -96,8 +109,16 @@ class WorkerWaiter {
         log.debug(`Adding new ChefWorker (${this.chefWorkers.length + 1}/${this.maxWorkers})`);
 
         // Create a new ChefWorker and send it the docURL
-        const newWorker = new ChefWorker();
-        newWorker.addEventListener("message", this.handleChefMessage.bind(this));
+        const newWorker = new ChefWorker(),
+            newWorkerObj = {
+                worker: newWorker,
+                active: false,
+                inputNum: -1,
+                loaded: false,
+                runTarget: null,
+                silentTarget: null,
+            };
+        newWorker.addEventListener("message", event => this.handleChefMessage(event, newWorkerObj));
         newWorker.postMessage({
             action: "setLogPrefix",
             data: "ChefWorker"
@@ -114,13 +135,6 @@ class WorkerWaiter {
         }
         newWorker.postMessage({"action": "docURL", "data": docURL});
 
-
-        // Store the worker, whether or not it's active, and the inputNum as an object
-        const newWorkerObj = {
-            worker: newWorker,
-            active: false,
-            inputNum: -1
-        };
 
         this.chefWorkers.push(newWorkerObj);
         return this.chefWorkers.indexOf(newWorkerObj);
@@ -156,6 +170,11 @@ class WorkerWaiter {
         if (this.chefWorkers.length > 1 || this.chefWorkers[index].active) {
             log.debug(`Removing ChefWorker at index ${index}`);
             this.chefWorkers[index].worker.terminate();
+            for (const [highlightId, request] of this.highlightRequests) {
+                if (request.workerObj === this.chefWorkers[index]) {
+                    this.highlightRequests.delete(highlightId);
+                }
+            }
             this.chefWorkers.splice(index, 1);
         }
 
@@ -166,94 +185,194 @@ class WorkerWaiter {
     }
 
     /**
-     * Finds and returns the object for the ChefWorker of a given inputNum
+     * Checks whether one Bake target still belongs to the visible Recipe.
      *
-     * @param {number} inputNum
+     * @param {Object|null} target - Captured Bake target.
+     * @returns {boolean} Whether the target is current.
      */
-    getChefWorker(inputNum) {
-        for (let i = 0; i < this.chefWorkers.length; i++) {
-            if (this.chefWorkers[i].inputNum === inputNum) {
-                return this.chefWorkers[i];
-            }
-        }
+    isCurrentBakeTarget(target) {
+        return !!target && !!this.bakeTarget &&
+            target.bakeId === this.bakeTarget.bakeId &&
+            target.recipeRevisionAtStart === this.bakeTarget.recipeRevisionAtStart &&
+            target.recipeRevisionAtStart === this.manager.recipe.getRecipeRevision();
     }
 
     /**
-     * Handler for messages sent back by the ChefWorkers
+     * Checks whether a Run message belongs to the task assigned to its Worker.
      *
-     * @param {MessageEvent} e
+     * @param {Object} data - Worker message data.
+     * @param {Object} workerObj - Source Worker state.
+     * @returns {boolean} Whether the message matches the assigned task.
      */
-    handleChefMessage(e) {
-        const r = e.data;
-        let inputNum = 0;
-        log.debug(`Receiving '${r.action}' from ChefWorker.`);
+    matchesWorkerRun(data, workerObj) {
+        const target = workerObj?.runTarget;
+        return !!target && data?.bakeId === target.bakeId &&
+            data?.recipeRevisionAtStart === target.recipeRevisionAtStart &&
+            data?.inputNum === target.inputNum;
+    }
 
-        if (Object.prototype.hasOwnProperty.call(r.data, "inputNum")) {
-            inputNum = r.data.inputNum;
+    /**
+     * Drops work that has not reached a ChefWorker after its Recipe becomes stale.
+     */
+    dropStaleBakeQueue() {
+        this.inputs = [];
+        this.inputNums = [];
+    }
+
+    /**
+     * Completes stale Bake lifecycle after every dispatched request settles.
+     */
+    completeStaleBakeIfIdle() {
+        if (this.loadingOutputs > 0 || this.chefWorkers.some(worker => worker.active && worker.runTarget)) {
+            return;
+        }
+        this.setBakingStatus(false);
+        this.totalOutputs = 0;
+        this.bakeTarget = null;
+        document.getElementById("bake").style.background = "";
+    }
+
+    /**
+     * Settles a terminal stale response without applying its page effects.
+     *
+     * @param {Object} workerObj - Source Worker state.
+     */
+    settleStaleWorker(workerObj) {
+        workerObj.active = false;
+        workerObj.inputNum = -1;
+        workerObj.runTarget = null;
+        this.dropStaleBakeQueue();
+        this.completeStaleBakeIfIdle();
+    }
+
+    /**
+     * Handles ChefWorker messages within their assigned identity scope.
+     *
+     * @param {MessageEvent} e - Worker message.
+     * @param {Object} workerObj - Trusted source Worker state.
+     */
+    handleChefMessage(e, workerObj) {
+        const r = e.data,
+            policy = getWorkerActionPolicy(r?.action);
+        log.debug(`Receiving '${r?.action}' from ChefWorker.`);
+
+        if (!policy) {
+            log.error("Unrecognised message from ChefWorker");
+            return;
         }
 
-        const currentWorker = this.getChefWorker(inputNum);
+        if (policy.scope === WORKER_ACTION_SCOPE.LIFECYCLE) {
+            if (workerObj.loaded) return;
+            workerObj.loaded = true;
+            this.app.workerLoaded = true;
+            log.debug("ChefWorker loaded");
+            if (!this.loaded) {
+                this.app.loaded();
+                this.loaded = true;
+            } else if (!workerObj.active && this.inputs.length > 0) {
+                if (this.isCurrentBakeTarget(this.bakeTarget)) {
+                    this.bakeNextInput(this.chefWorkers.indexOf(workerObj));
+                } else {
+                    this.dropStaleBakeQueue();
+                    this.completeStaleBakeIfIdle();
+                }
+            }
+            return;
+        }
 
+        if (policy.scope === WORKER_ACTION_SCOPE.HIGHLIGHT) {
+            const request = this.highlightRequests.get(r.data?.highlightId);
+            if (!request || request.workerObj !== workerObj) return;
+            this.highlightRequests.delete(r.data.highlightId);
+            if (r.data.recipeRevisionAtStart !== request.recipeRevisionAtStart ||
+                request.recipeRevisionAtStart !== this.manager.recipe.getRecipeRevision()) return;
+            this.manager.highlighter.displayHighlights(r.data.pos, r.data.direction);
+            return;
+        }
+
+        if (policy.scope === WORKER_ACTION_SCOPE.REQUEST) {
+            // ChefWorker request conversions are not used by the page and have no registered identity.
+            return;
+        }
+
+        if (policy.scope === WORKER_ACTION_SCOPE.SILENT_RUN) {
+            const target = workerObj.silentTarget;
+            if (!target || r.data?.silentBakeId !== target.silentBakeId ||
+                r.data?.recipeRevisionAtStart !== target.recipeRevisionAtStart) return;
+            workerObj.active = false;
+            workerObj.silentTarget = null;
+            if (this.inputs.length > 0 && this.isCurrentBakeTarget(this.bakeTarget)) {
+                this.bakeNextInput(this.chefWorkers.indexOf(workerObj));
+            } else if (this.inputs.length > 0) {
+                this.dropStaleBakeQueue();
+                this.completeStaleBakeIfIdle();
+            }
+            return;
+        }
+
+        if (!this.matchesWorkerRun(r.data, workerObj)) return;
+        if (!this.isCurrentBakeTarget(workerObj.runTarget)) {
+            if (policy.terminal) this.settleStaleWorker(workerObj);
+            return;
+        }
+
+        const inputNum = r.data.inputNum;
         switch (r.action) {
-            case "bakeComplete":
+            case WORKER_ACTION.BAKE_COMPLETE:
                 log.debug(`Bake ${inputNum} complete.`);
                 this.manager.timing.recordTime("bakeComplete", inputNum);
                 this.manager.timing.recordTime("bakeDuration", inputNum, r.data.duration);
 
                 if (r.data.error) {
                     this.app.handleError(r.data.error);
+                    this.manager.output.updateOutputBakeTarget(
+                        r.data.bakeId,
+                        r.data.recipeRevisionAtStart,
+                        inputNum
+                    );
                     this.manager.output.updateOutputError(r.data.error, inputNum, r.data.progress);
                 } else {
-                    this.updateOutput(r.data, r.data.inputNum, r.data.bakeId, r.data.progress);
+                    this.updateOutput(
+                        r.data,
+                        inputNum,
+                        r.data.bakeId,
+                        r.data.recipeRevisionAtStart,
+                        r.data.progress
+                    );
                 }
 
                 this.app.progress = r.data.progress;
-
-                if (r.data.progress === this.recipeConfig.length) {
-                    this.step = false;
-                }
-
-                this.workerFinished(currentWorker);
+                if (r.data.progress === this.recipeConfig.length) this.step = false;
+                this.workerFinished(workerObj);
                 break;
-            case "bakeError":
+            case WORKER_ACTION.BAKE_ERROR:
                 this.app.handleError(r.data.error);
+                this.manager.output.updateOutputBakeTarget(
+                    r.data.bakeId,
+                    r.data.recipeRevisionAtStart,
+                    inputNum
+                );
                 this.manager.output.updateOutputError(r.data.error, inputNum, r.data.progress);
                 this.app.progress = r.data.progress;
-                this.workerFinished(currentWorker);
+                this.workerFinished(workerObj);
                 break;
-            case "dishReturned":
-                this.callbacks[r.data.id](r.data);
+            case WORKER_ACTION.STATUS_MESSAGE:
+                this.manager.output.updateOutputMessage(r.data.message, inputNum, true);
                 break;
-            case "silentBakeComplete":
+            case WORKER_ACTION.PROGRESS_MESSAGE:
+                this.manager.output.updateOutputProgress(r.data.progress, r.data.total, inputNum);
                 break;
-            case "workerLoaded":
-                this.app.workerLoaded = true;
-                log.debug("ChefWorker loaded");
-                if (!this.loaded) {
-                    this.app.loaded();
-                    this.loaded = true;
-                } else {
-                    this.bakeNextInput(this.getInactiveChefWorker(false));
+            case WORKER_ACTION.OPTION_UPDATE:
+                if (Object.prototype.hasOwnProperty.call(this.app.options, r.data.option)) {
+                    log.debug(`Setting ${r.data.option} to ${r.data.value}`);
+                    this.app.options[r.data.option] = r.data.value;
                 }
                 break;
-            case "statusMessage":
-                this.manager.output.updateOutputMessage(r.data.message, r.data.inputNum, true);
-                break;
-            case "progressMessage":
-                this.manager.output.updateOutputProgress(r.data.progress, r.data.total, r.data.inputNum);
-                break;
-            case "optionUpdate":
-                log.debug(`Setting ${r.data.option} to ${r.data.value}`);
-                this.app.options[r.data.option] = r.data.value;
-                break;
-            case "setRegisters":
+            case WORKER_ACTION.SET_REGISTERS:
                 this.manager.recipe.setRegisters(r.data.opIndex, r.data.numPrevRegisters, r.data.registers);
                 break;
-            case "highlightsCalculated":
-                this.manager.highlighter.displayHighlights(r.data.pos, r.data.direction);
-                break;
             default:
-                log.error("Unrecognised message from ChefWorker", e);
+                log.error("Unhandled ChefWorker action policy", r.action);
                 break;
         }
     }
@@ -264,10 +383,11 @@ class WorkerWaiter {
      * @param {Object} data
      * @param {number} inputNum
      * @param {number} bakeId
+     * @param {number} recipeRevisionAtStart
      * @param {number} progress
      */
-    updateOutput(data, inputNum, bakeId, progress) {
-        this.manager.output.updateOutputBakeId(bakeId, inputNum);
+    updateOutput(data, inputNum, bakeId, recipeRevisionAtStart, progress) {
+        this.manager.output.updateOutputBakeTarget(bakeId, recipeRevisionAtStart, inputNum);
         if (progress === this.recipeConfig.length) {
             progress = false;
         }
@@ -306,7 +426,7 @@ class WorkerWaiter {
         let bakingInputs = 0;
 
         for (let i = 0; i < this.chefWorkers.length; i++) {
-            if (this.chefWorkers[i].active) {
+            if (this.chefWorkers[i].active && this.chefWorkers[i].runTarget) {
                 bakingInputs++;
             }
         }
@@ -341,6 +461,7 @@ class WorkerWaiter {
             this.inputNums = [];
             this.totalOutputs = 0;
             this.loadingOutputs = 0;
+            this.bakeTarget = null;
         }
     }
 
@@ -383,6 +504,7 @@ class WorkerWaiter {
         this.inputNums = [];
         this.totalOutputs = 0;
         this.loadingOutputs = 0;
+        this.bakeTarget = null;
         if (!silent) this.manager.output.set(this.manager.tabs.getActiveTab("output"));
     }
 
@@ -396,9 +518,17 @@ class WorkerWaiter {
      */
     workerFinished(workerObj) {
         const workerIdx = this.chefWorkers.indexOf(workerObj);
+        if (workerIdx === -1) return;
         this.chefWorkers[workerIdx].active = false;
+        this.chefWorkers[workerIdx].inputNum = -1;
+        this.chefWorkers[workerIdx].runTarget = null;
         if (this.inputs.length > 0) {
-            this.bakeNextInput(workerIdx);
+            if (this.isCurrentBakeTarget(this.bakeTarget)) {
+                this.bakeNextInput(workerIdx);
+            } else {
+                this.dropStaleBakeQueue();
+                this.completeStaleBakeIfIdle();
+            }
         } else if (this.inputNums.length === 0 && this.loadingOutputs === 0) {
             // The ChefWorker is no longer needed
             log.debug("No more inputs to bake.");
@@ -452,6 +582,7 @@ class WorkerWaiter {
 
         document.getElementById("bake").style.background = "";
         this.totalOutputs = 0; // Reset for next time
+        this.bakeTarget = null;
         log.debug("--- Bake complete ---");
     }
 
@@ -464,6 +595,11 @@ class WorkerWaiter {
         if (this.inputs.length === 0) return;
         if (workerIdx === -1) return;
         if (!this.chefWorkers[workerIdx]) return;
+        if (!this.isCurrentBakeTarget(this.bakeTarget)) {
+            this.dropStaleBakeQueue();
+            this.completeStaleBakeIfIdle();
+            return;
+        }
         this.chefWorkers[workerIdx].active = true;
         const nextInput = this.inputs.splice(0, 1)[0];
         if (typeof nextInput.inputNum === "string") nextInput.inputNum = parseInt(nextInput.inputNum, 10);
@@ -473,6 +609,11 @@ class WorkerWaiter {
         this.manager.output.updateOutputStatus("baking", nextInput.inputNum);
 
         this.chefWorkers[workerIdx].inputNum = nextInput.inputNum;
+        this.chefWorkers[workerIdx].runTarget = Object.freeze({
+            bakeId: this.bakeTarget.bakeId,
+            recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
+            inputNum: nextInput.inputNum,
+        });
         const input = nextInput.input,
             recipeConfig = this.recipeConfig;
 
@@ -502,7 +643,8 @@ class WorkerWaiter {
                 recipeConfig: recipeConfig,
                 options: this.options,
                 inputNum: nextInput.inputNum,
-                bakeId: this.bakeId
+                bakeId: this.bakeTarget.bakeId,
+                recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
             }
         }, transferable);
 
@@ -511,7 +653,8 @@ class WorkerWaiter {
                 action: "bakeNext",
                 data: {
                     inputNum: this.inputNums.splice(0, 1)[0],
-                    bakeId: this.bakeId
+                    bakeId: this.bakeTarget.bakeId,
+                    recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
                 }
             });
             this.loadingOutputs++;
@@ -531,6 +674,10 @@ class WorkerWaiter {
         this.manager.recipe.updateBreakpointIndicator(false);
         this.bakeStartTime = Date.now();
         this.bakeId++;
+        this.bakeTarget = Object.freeze({
+            bakeId: this.bakeId,
+            recipeRevisionAtStart: this.manager.recipe.getRecipeRevision(),
+        });
         this.recipeConfig = recipeConfig;
         this.options = options;
         this.progress = progress;
@@ -546,13 +693,19 @@ class WorkerWaiter {
      * @param {string | ArrayBuffer} inputData.input
      * @param {number} inputData.inputNum
      * @param {number} inputData.bakeId
+     * @param {number} inputData.recipeRevisionAtStart
      */
     queueInput(inputData) {
+        if (!this.bakeTarget || inputData.bakeId !== this.bakeTarget.bakeId ||
+            inputData.recipeRevisionAtStart !== this.bakeTarget.recipeRevisionAtStart) return;
         this.loadingOutputs--;
-        if (this.app.baking && inputData.bakeId === this.bakeId) {
-            this.inputs.push(inputData);
-            this.bakeNextInput(this.getInactiveChefWorker(true));
+        if (!this.app.baking || !this.isCurrentBakeTarget(this.bakeTarget)) {
+            this.dropStaleBakeQueue();
+            this.completeStaleBakeIfIdle();
+            return;
         }
+        this.inputs.push(inputData);
+        this.bakeNextInput(this.getInactiveChefWorker(true));
     }
 
     /**
@@ -561,10 +714,18 @@ class WorkerWaiter {
      * @param {object} inputData
      * @param {number} inputData.inputNum
      * @param {number} inputData.bakeId
+     * @param {number} inputData.recipeRevisionAtStart
      */
     queueInputError(inputData) {
+        if (!this.bakeTarget || inputData.bakeId !== this.bakeTarget.bakeId ||
+            inputData.recipeRevisionAtStart !== this.bakeTarget.recipeRevisionAtStart) return;
         this.loadingOutputs--;
-        if (this.app.baking && inputData.bakeId === this.bakeId) {
+        if (this.app.baking && this.isCurrentBakeTarget(this.bakeTarget)) {
+            this.manager.output.updateOutputBakeTarget(
+                this.bakeTarget.bakeId,
+                this.bakeTarget.recipeRevisionAtStart,
+                inputData.inputNum
+            );
             this.manager.output.updateOutputError("Error queueing the input for a bake.", inputData.inputNum, 0);
 
             if (this.inputNums.length === 0) return;
@@ -574,11 +735,14 @@ class WorkerWaiter {
                 action: "bakeNext",
                 data: {
                     inputNum: this.inputNums.splice(0, 1)[0],
-                    bakeId: this.bakeId
+                    bakeId: this.bakeTarget.bakeId,
+                    recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
                 }
             });
             this.loadingOutputs++;
-
+        } else {
+            this.dropStaleBakeQueue();
+            this.completeStaleBakeIfIdle();
         }
     }
 
@@ -633,7 +797,8 @@ class WorkerWaiter {
                     action: "bakeNext",
                     data: {
                         inputNum: this.inputNums.splice(0, 1)[0],
-                        bakeId: this.bakeId
+                        bakeId: this.bakeTarget.bakeId,
+                        recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
                     }
                 });
                 this.loadingOutputs++;
@@ -655,10 +820,19 @@ class WorkerWaiter {
             workerId = this.addChefWorker();
         }
         if (workerId === -1) return;
+        if (this.silentBakeID === Number.MAX_SAFE_INTEGER) return;
+        const target = Object.freeze({
+            silentBakeId: ++this.silentBakeID,
+            recipeRevisionAtStart: this.manager.recipe.getRecipeRevision(),
+        });
+        this.chefWorkers[workerId].active = true;
+        this.chefWorkers[workerId].silentTarget = target;
         this.chefWorkers[workerId].worker.postMessage({
             action: "silentBake",
             data: {
-                recipeConfig: recipeConfig
+                recipeConfig: recipeConfig,
+                silentBakeId: target.silentBakeId,
+                recipeRevisionAtStart: target.recipeRevisionAtStart,
             }
         });
     }
@@ -669,23 +843,42 @@ class WorkerWaiter {
      * @param {MessageEvent} e
      */
     handleDishMessage(e) {
-        const r = e.data;
+        const r = e.data,
+            policy = getWorkerActionPolicy(r?.action);
         log.debug(`Receiving '${r.action}' from DishWorker`);
 
-        switch (r.action) {
-            case "dishReturned":
-                this.dishWorker.currentAction = "";
-                this.callbacks[r.data.id](r.data);
-
-                if (this.dishWorkerQueue.length > 0) {
-                    this.postDishMessage(this.dishWorkerQueue.splice(0, 1)[0]);
-                }
-
-                break;
-            default:
-                log.error("Unrecognised message from DishWorker", e);
-                break;
+        if (policy?.scope !== WORKER_ACTION_SCOPE.REQUEST ||
+            r.data?.id !== this.dishWorker.currentRequestId ||
+            !this.dishCallbacks.has(r.data.id)) {
+            log.error("Unmatched message from DishWorker");
+            return;
         }
+
+        const callback = this.dishCallbacks.get(r.data.id);
+        this.dishCallbacks.delete(r.data.id);
+        this.dishWorker.currentAction = "";
+        this.dishWorker.currentRequestId = null;
+        callback(r.data);
+
+        if (this.dishWorkerQueue.length > 0) {
+            this.postDishMessage(this.dishWorkerQueue.splice(0, 1)[0]);
+        }
+    }
+
+    /**
+     * Registers one callback under a non-reused pending request identity.
+     *
+     * @param {Function} callback - DishWorker response callback.
+     * @returns {number} Request identity.
+     */
+    registerDishCallback(callback) {
+        if (typeof callback !== "function") throw new TypeError("DishWorker callback is invalid");
+        if (this.callbackID === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("DishWorker request identity limit reached");
+        }
+        const id = ++this.callbackID;
+        this.dishCallbacks.set(id, callback);
+        return id;
     }
 
     /**
@@ -696,8 +889,7 @@ class WorkerWaiter {
      * @param {Function} callback
      */
     getDishAs(dish, type, callback) {
-        const id = this.callbackID++;
-        this.callbacks[id] = callback;
+        const id = this.registerDishCallback(callback);
         if (this.dishWorker.worker === null) this.setupDishWorker();
 
         this.postDishMessage({
@@ -719,8 +911,7 @@ class WorkerWaiter {
      * @returns {string}
      */
     getDishTitle(dish, maxLength, callback) {
-        const id = this.callbackID++;
-        this.callbacks[id] = callback;
+        const id = this.registerDishCallback(callback);
         if (this.dishWorker.worker === null) this.setupDishWorker();
 
         this.postDishMessage({
@@ -742,8 +933,7 @@ class WorkerWaiter {
      * @returns {string}
      */
     bufferToStr(buffer, encoding, callback) {
-        const id = this.callbackID++;
-        this.callbacks[id] = callback;
+        const id = this.registerDishCallback(callback);
         if (this.dishWorker.worker === null) this.setupDishWorker();
 
         this.postDishMessage({
@@ -785,6 +975,7 @@ class WorkerWaiter {
             this.queueDishMessage(message);
         } else {
             this.dishWorker.currentAction = message.action;
+            this.dishWorker.currentRequestId = message.data.id;
             this.dishWorker.worker.postMessage(message);
         }
     }
@@ -874,12 +1065,22 @@ class WorkerWaiter {
             workerIdx = this.addChefWorker();
         }
         if (workerIdx === -1) return;
+        if (this.highlightRequests.size >= MAX_PENDING_HIGHLIGHT_REQUESTS ||
+            this.highlightID === Number.MAX_SAFE_INTEGER) return;
+        const highlightId = ++this.highlightID,
+            recipeRevisionAtStart = this.manager.recipe.getRecipeRevision();
+        this.highlightRequests.set(highlightId, Object.freeze({
+            workerObj: this.chefWorkers[workerIdx],
+            recipeRevisionAtStart: recipeRevisionAtStart,
+        }));
         this.chefWorkers[workerIdx].worker.postMessage({
             action: "highlight",
             data: {
                 recipeConfig: recipeConfig,
                 direction: direction,
-                pos: pos
+                pos: pos,
+                highlightId: highlightId,
+                recipeRevisionAtStart: recipeRevisionAtStart,
             }
         });
     }

@@ -32,6 +32,7 @@ import "./tests/OperationConfigTypes.mjs";
 import "./tests/RecipeModel.mjs";
 import "./tests/RecipePatch.mjs";
 import "./tests/RecipeTransaction.mjs";
+import "./tests/WorkerActionPolicy.mjs";
 import "./tests/ParseQRCode.mjs";
 import "./tests/WebpackConfig.mjs";
 import "./tests/WebMCPWaiter.mjs";
