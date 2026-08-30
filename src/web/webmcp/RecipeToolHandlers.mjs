@@ -1,3 +1,8 @@
+import {
+    RECIPE_TRANSACTION_ERROR_CODE,
+    RECIPE_TRANSACTION_STATUS,
+    RecipeTransactionError,
+} from "../recipe/RecipeTransaction.mjs";
 import {ToolExecutionError} from "./ToolExecutor.mjs";
 import {TOOL_NAME} from "./ToolDefinitions.mjs";
 import {
@@ -30,13 +35,58 @@ function createRecipeStepState(step) {
 
 
 /**
+ * Maps Recipe transaction failures into the reviewed public error catalog.
+ *
+ * @param {Error} error - Failure from the Recipe transaction service.
+ * @returns {string} Public error code.
+ */
+function mapRecipeTransactionError(error) {
+    if (!(error instanceof RecipeTransactionError)) return TOOL_ERROR_CODE.INTERNAL_ERROR;
+    if (error.code === RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE) {
+        return TOOL_ERROR_CODE.STALE_RECIPE;
+    }
+    if (error.code === RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY) {
+        return TOOL_ERROR_CODE.BAKE_BUSY;
+    }
+    if (error.code === RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH) {
+        return error.patchCode === "STEP_NOT_FOUND" || error.patchCode === "ANCHOR_NOT_FOUND" ?
+            TOOL_ERROR_CODE.UNKNOWN_STEP : TOOL_ERROR_CODE.INVALID_PATCH;
+    }
+    if (error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED) {
+        return error.policyCode === "PROFILE_REQUIRED" ?
+            TOOL_ERROR_CODE.UNREVIEWED_OPERATION : TOOL_ERROR_CODE.RISK_BLOCKED;
+    }
+    return TOOL_ERROR_CODE.INTERNAL_ERROR;
+}
+
+
+/**
+ * Counts committed actions without retaining submitted values or Operation names.
+ *
+ * @param {Object[]} actions - Trusted transaction action records.
+ * @returns {Object} Total and per-action counts.
+ */
+function createActionSummary(actions) {
+    const actionCounts = {};
+    for (const action of actions) {
+        actionCounts[action.type] = (actionCounts[action.type] ?? 0) + 1;
+    }
+    return {
+        actionCount: actions.length,
+        actionCounts,
+    };
+}
+
+
+/**
  * Creates Recipe collaboration handlers around the shared Recipe service.
  *
  * @param {Object} recipeWaiter - Recipe state and transaction service.
  * @returns {Object} Handlers keyed by formal tool name.
  */
 function createRecipeToolHandlers(recipeWaiter) {
-    if (!recipeWaiter || typeof recipeWaiter.getReadProjection !== "function") {
+    if (!recipeWaiter || typeof recipeWaiter.getReadProjection !== "function" ||
+        typeof recipeWaiter.applyAgentPatch !== "function") {
         throw new TypeError("Recipe tool handlers require the Recipe service");
     }
 
@@ -86,8 +136,48 @@ function createRecipeToolHandlers(recipeWaiter) {
         return {data, state};
     }
 
+    /**
+     * Commits one authorized Recipe patch and returns a value-redacted summary.
+     *
+     * @param {Object} input - Schema-validated Recipe patch input.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @returns {Object} Handler data and resulting Recipe collaboration state.
+     */
+    function applyRecipePatch(input, invocation) {
+        invocation.checkpoint();
+
+        let result;
+        try {
+            result = recipeWaiter.applyAgentPatch(input);
+        } catch (err) {
+            throw new ToolExecutionError(mapRecipeTransactionError(err));
+        }
+
+        const actions = result.status === RECIPE_TRANSACTION_STATUS.COMMITTED ?
+                result.change.actions : [],
+            data = {
+                status: result.status,
+                summary: createActionSummary(actions),
+                insertedSteps: {
+                    commandIndexes: result.insertedSteps.map(step => step.commandIndex),
+                    stepIds: result.insertedSteps.map(step => step.stepId),
+                },
+            },
+            state = {
+                sessionEpoch: invocation.sessionEpoch,
+                recipeRevision: result.recipeRevision,
+                executionCapability: USER_BAKE_REQUIRED,
+            };
+
+        if (!isSuccessResultWithinBudget(data, state)) {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);
+        }
+        return {data, state};
+    }
+
     return Object.freeze({
         [TOOL_NAME.GET_RECIPE_STATE]: getRecipeState,
+        [TOOL_NAME.APPLY_RECIPE_PATCH]: applyRecipePatch,
     });
 }
 
