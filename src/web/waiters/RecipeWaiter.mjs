@@ -9,6 +9,7 @@ import Sortable from "sortablejs";
 import Utils from "../../core/Utils.mjs";
 import {escapeControlChars} from "../utils/editorUtils.mjs";
 import DOMPurify from "dompurify";
+import {RecipeModel} from "../recipe/RecipeModel.mjs";
 
 
 /**
@@ -26,6 +27,8 @@ class RecipeWaiter {
         this.app = app;
         this.manager = manager;
         this.removeIntent = false;
+        this.model = new RecipeModel();
+        this.modelSyncDepth = 0;
     }
 
 
@@ -330,12 +333,12 @@ class RecipeWaiter {
 
 
     /**
-     * Generates a configuration object to represent the current recipe.
+     * Reads the visible Recipe as runtime identities and compatible Operation configurations.
      *
-     * @returns {recipeConfig}
+     * @returns {Object[]} Ordered DOM projection.
      */
-    getConfig() {
-        const config = [];
+    getDOMProjection() {
+        const projectedSteps = [];
         let ingredients, ingList, disabled, bp, item;
         const operations = document.querySelectorAll("#rec-list li.operation");
 
@@ -377,10 +380,65 @@ class RecipeWaiter {
                 item.breakpoint = true;
             }
 
-            config.push(item);
+            const stepId = operations[i].dataset.recipeStepId;
+            if (!stepId) throw new Error("Recipe DOM Operation is missing runtime identity");
+            projectedSteps.push({stepId, operation: item});
         }
 
-        return config;
+        return projectedSteps;
+    }
+
+
+    /**
+     * Synchronizes visible Recipe semantics into the in-memory model.
+     *
+     * @returns {Object|null} Commit result, or null while a DOM batch is active.
+     */
+    syncModelFromDOM() {
+        if (this.modelSyncDepth > 0) return null;
+        return this.model.commitProjectedSteps(this.getDOMProjection());
+    }
+
+
+    /**
+     * Groups synchronous DOM changes into one Recipe model synchronization.
+     *
+     * @param {Function} callback - Synchronous DOM mutation callback.
+     * @returns {*} Callback return value.
+     */
+    batchDOMChanges(callback) {
+        if (typeof callback !== "function") throw new TypeError("Recipe DOM batch requires a callback");
+
+        this.modelSyncDepth++;
+        let completed = false;
+        try {
+            const result = callback();
+            completed = true;
+            return result;
+        } finally {
+            this.modelSyncDepth--;
+            if (completed && this.modelSyncDepth === 0) this.syncModelFromDOM();
+        }
+    }
+
+
+    /**
+     * Exports the current Recipe using CyberChef's existing configuration format.
+     *
+     * @returns {Object[]} Recipe configuration without runtime identity.
+     */
+    getConfig() {
+        return this.model.exportConfig();
+    }
+
+
+    /**
+     * Returns the current Recipe structure without argument values.
+     *
+     * @returns {Object} Redacted Recipe projection.
+     */
+    getReadProjection() {
+        return this.model.getReadProjection();
     }
 
 
@@ -411,6 +469,7 @@ class RecipeWaiter {
     buildRecipeOperation(el) {
         const opName = el.textContent;
         const op = new HTMLOperation(opName, this.app.operations[opName], this.app, this.manager);
+        if (!el.dataset.recipeStepId) el.dataset.recipeStepId = this.model.allocateStepId();
         el.innerHTML = op.toFullHtml();
 
         if (this.app.operations[opName].flowControl) {
@@ -516,8 +575,10 @@ class RecipeWaiter {
     opAdd(e) {
         log.debug(`'${e.target.querySelector(".op-title").textContent}' added to recipe`);
 
-        this.triggerArgEvents(e.target);
-        window.dispatchEvent(this.manager.statechange);
+        this.batchDOMChanges(() => {
+            this.triggerArgEvents(e.target);
+            window.dispatchEvent(this.manager.statechange);
+        });
     }
 
 
@@ -585,6 +646,7 @@ class RecipeWaiter {
 
         if (text) {
             targ.value = text;
+            this.ingChange();
             return;
         }
 
