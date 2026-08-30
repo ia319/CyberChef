@@ -39,6 +39,7 @@ for (const opObj in Ops) {
         description: op.description,
         infoURL:     op.infoURL,
         inputType:   op.inputType,
+        coreOutputType: op.outputType,
         outputType:  op.presentType,
         flowControl: op.flowControl,
         manualBake:  op.manualBake,

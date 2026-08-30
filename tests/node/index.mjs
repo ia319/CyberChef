@@ -27,6 +27,7 @@ import "./tests/Categories.mjs";
 import "./tests/ToHTMLEntity.mjs";
 import "./tests/lib/BigIntUtils.mjs";
 import "./tests/lib/ChartsProtocolPrototypePollution.mjs";
+import "./tests/OperationConfigTypes.mjs";
 import "./tests/ParseQRCode.mjs";
 import "./tests/WebpackConfig.mjs";
 import "./tests/WebMCPWaiter.mjs";
