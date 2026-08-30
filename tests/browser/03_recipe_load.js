@@ -130,6 +130,150 @@ module.exports = {
             });
     },
 
+    "Agent Recipe transaction publishes once without Auto Bake": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                recipe = app.manager.recipe;
+
+            app.manager.controls.setAutoBake(true);
+            app.setRecipeConfig([
+                {op: "To Base64", args: ["A-Za-z0-9+/="]},
+                {op: "To Base64", args: ["A-Za-z0-9+/="]},
+            ]);
+            window.dispatchEvent(app.manager.statechange);
+
+            const before = recipe.getReadProjection(),
+                firstStep = document.querySelector(
+                    `[data-recipe-step-id="${before.steps[0].stepId}"]`
+                ),
+                secondStep = document.querySelector(
+                    `[data-recipe-step-id="${before.steps[1].stepId}"]`
+                );
+            firstStep.querySelector(".hide-args-icon").click();
+            secondStep.querySelector(".arg").focus();
+
+            const ingredientHandlerCount = () => Object.values(app.manager.dynamicHandlers)
+                .flat()
+                .filter(handler => handler.scope?.dynamicHandlerGroup === "recipeIngredient")
+                .length;
+
+            window.__recipeChangeEvents = [];
+            window.addEventListener("recipechange", event => {
+                window.__recipeChangeEvents.push(event.detail);
+            }, {once: true});
+
+            const bakeId = app.manager.worker.bakeId,
+                result = recipe.applyAgentPatch({
+                    expectedRevision: before.recipeRevision,
+                    changes: [
+                        {
+                            type: "setArgument",
+                            stepId: before.steps[1].stepId,
+                            argumentIndex: 0,
+                            value: "A-Za-z0-9-_",
+                        },
+                        {
+                            type: "move",
+                            stepId: before.steps[1].stepId,
+                            beforeStepId: before.steps[0].stepId,
+                        },
+                        {
+                            type: "insert",
+                            operation: "To Hex",
+                            afterStepId: before.steps[0].stepId,
+                        },
+                    ],
+                });
+
+            window.__agentRecipeTransaction = {
+                bakeId,
+                beforeRevision: before.recipeRevision,
+                result,
+                firstStepId: before.steps[0].stepId,
+                secondStepId: before.steps[1].stepId,
+                ingredientHandlerCount: ingredientHandlerCount(),
+            };
+        });
+
+        browser.pause(100).execute(() => {
+            const app = window.app,
+                recipe = app.manager.recipe,
+                record = window.__agentRecipeTransaction,
+                projection = recipe.getReadProjection(),
+                activeOperation = document.activeElement.closest("li.operation"),
+                firstStep = document.querySelector(
+                    `[data-recipe-step-id="${record.firstStepId}"]`
+                );
+
+            return {
+                result: record.result,
+                recipeRevision: projection.recipeRevision,
+                stepIds: projection.steps.map(step => step.stepId),
+                config: recipe.getConfig(),
+                bakeIdBefore: record.bakeId,
+                bakeIdAfter: app.manager.worker.bakeId,
+                outputStatuses: Object.values(app.manager.output.outputs).map(output => output.status),
+                staleVisible: !document.getElementById("stale-indicator").classList.contains("hidden"),
+                eventCount: window.__recipeChangeEvents.length,
+                event: window.__recipeChangeEvents[0],
+                ingredientHandlerCountBefore: record.ingredientHandlerCount,
+                ingredientHandlerCountAfter: Object.values(app.manager.dynamicHandlers)
+                    .flat()
+                    .filter(handler => handler.scope?.dynamicHandlerGroup === "recipeIngredient")
+                    .length,
+                firstStepCollapsed: firstStep.querySelector(".hide-args-icon")
+                    .getAttribute("hide-args") === "true",
+                focusedStepId: activeOperation?.dataset.recipeStepId ?? null,
+                focusedArgumentIndex: activeOperation ?
+                    Array.from(activeOperation.querySelectorAll(".arg")).indexOf(document.activeElement) : -1,
+                urlContainsRuntimeId: window.location.href.includes("transaction-step-"),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.result.status, "committed");
+            browser.assert.strictEqual(value.recipeRevision, value.result.change.afterRevision);
+            browser.assert.strictEqual(value.result.change.beforeRevision + 1, value.recipeRevision);
+            browser.assert.strictEqual(value.result.change.actor, "agent");
+            browser.assert.strictEqual(value.result.change.source, "webmcp");
+            browser.assert.strictEqual(value.stepIds[0], value.focusedStepId);
+            browser.assert.strictEqual(value.focusedArgumentIndex, 0);
+            browser.assert.strictEqual(value.config[0].args[0], "A-Za-z0-9-_");
+            browser.assert.strictEqual(value.config[2].op, "To Hex");
+            browser.assert.strictEqual(value.bakeIdAfter, value.bakeIdBefore);
+            browser.assert.strictEqual(value.outputStatuses.every(status => status === "stale"), true);
+            browser.assert.strictEqual(value.staleVisible, true);
+            browser.assert.strictEqual(value.eventCount, 1);
+            browser.assert.deepStrictEqual(value.event, value.result.change);
+            browser.assert.strictEqual(
+                value.ingredientHandlerCountAfter,
+                value.ingredientHandlerCountBefore
+            );
+            browser.assert.strictEqual(value.firstStepCollapsed, true);
+            browser.assert.strictEqual(value.urlContainsRuntimeId, false);
+        });
+
+        browser.execute(() => {
+            const recipe = window.app.manager.recipe,
+                projection = recipe.getReadProjection(),
+                result = recipe.applyAgentPatch({
+                    expectedRevision: projection.recipeRevision,
+                    changes: projection.steps.map(step => ({type: "remove", stepId: step.stepId})),
+                }),
+                ingredientHandlerCount = Object.values(window.app.manager.dynamicHandlers)
+                    .flat()
+                    .filter(handler => handler.scope?.dynamicHandlerGroup === "recipeIngredient")
+                    .length;
+            return {
+                result,
+                stepCount: recipe.getReadProjection().steps.length,
+                ingredientHandlerCount,
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.result.status, "committed");
+            browser.assert.strictEqual(value.stepCount, 0);
+            browser.assert.strictEqual(value.ingredientHandlerCount, 0);
+        });
+    },
+
     after: browser => {
         browser.end();
     }

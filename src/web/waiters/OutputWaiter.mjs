@@ -615,6 +615,18 @@ class OutputWaiter {
         this.set(inputNum);
     }
 
+
+    /**
+     * Marks every existing Output as older than the current Recipe.
+     */
+    markRecipeStale() {
+        for (const [inputNum, output] of Object.entries(this.outputs)) {
+            output.status = "stale";
+            this.displayTabInfo(inputNum);
+        }
+        this.manager.controls.showStaleIndicator();
+    }
+
     /**
      * Updates the stored bake ID for the output in the output array
      *

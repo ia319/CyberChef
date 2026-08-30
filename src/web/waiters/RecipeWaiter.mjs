@@ -9,7 +9,14 @@ import Sortable from "sortablejs";
 import Utils from "../../core/Utils.mjs";
 import {escapeControlChars} from "../utils/editorUtils.mjs";
 import DOMPurify from "dompurify";
+import RecipeDOMProjection from "../recipe/RecipeDOMProjection.mjs";
 import {RecipeModel} from "../recipe/RecipeModel.mjs";
+import {
+    RECIPE_TRANSACTION_ERROR_CODE,
+    RECIPE_TRANSACTION_STATUS,
+    RecipeTransaction,
+    RecipeTransactionError,
+} from "../recipe/RecipeTransaction.mjs";
 
 
 /**
@@ -29,6 +36,10 @@ class RecipeWaiter {
         this.removeIntent = false;
         this.model = new RecipeModel();
         this.modelSyncDepth = 0;
+        this.transaction = new RecipeTransaction(
+            this.model,
+            new RecipeDOMProjection(this.app, this.manager)
+        );
     }
 
 
@@ -439,6 +450,26 @@ class RecipeWaiter {
      */
     getReadProjection() {
         return this.model.getReadProjection();
+    }
+
+
+    /**
+     * Applies an authorized Agent patch to the visible Recipe.
+     *
+     * @param {*} input - Raw apply_recipe_patch input.
+     * @returns {Object} Bounded transaction result.
+     */
+    applyAgentPatch(input) {
+        if (this.app.baking) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
+        }
+
+        const result = this.transaction.applyAgentPatch(input);
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.app.agentRecipeTransactionCommitted(result.change);
+            this.adjustWidth();
+        }
+        return result;
     }
 
 

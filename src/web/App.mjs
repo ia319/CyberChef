@@ -4,7 +4,7 @@
  * @license Apache-2.0
  */
 
-import Utils, { debounce } from "../core/Utils.mjs";
+import Utils, {cancelDebounce, debounce} from "../core/Utils.mjs";
 import {fromBase64} from "../core/lib/Base64.mjs";
 import Manager from "./Manager.mjs";
 import HTMLCategory from "./HTMLCategory.mjs";
@@ -795,6 +795,22 @@ class App {
             this.autoBake();
             this.updateURL(true, null, true);
         }, 20, "stateChange", this, [])();
+    }
+
+
+    /**
+     * Publishes the visible effects of one committed Agent Recipe transaction.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    agentRecipeTransactionCommitted(change) {
+        cancelDebounce("stateChange");
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        this.updateURL(true, null, true);
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
     }
 
 

@@ -6,6 +6,8 @@
 
 import Utils from "../core/Utils.mjs";
 
+const RECIPE_INGREDIENT_HANDLER_GROUP = "recipeIngredient";
+
 /**
  * Object to handle the creation of operation ingredients.
  */
@@ -32,6 +34,7 @@ class HTMLIngredient {
         this.defaultIndex = config.defaultIndex || 0;
         this.maxLength = config.maxLength || null;
         this.toggleValues = config.toggleValues;
+        this.dynamicHandlerGroup = RECIPE_INGREDIENT_HANDLER_GROUP;
         this.ingId = this.app.nextIngId();
         this.id = "ing-" + this.ingId;
         this.tabIndex = this.ingId + 2; // Input = 1, Search = 2
@@ -401,4 +404,7 @@ class HTMLIngredient {
 
 }
 
+export {
+    RECIPE_INGREDIENT_HANDLER_GROUP,
+};
 export default HTMLIngredient;

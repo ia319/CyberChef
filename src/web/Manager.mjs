@@ -326,7 +326,8 @@ class Manager {
     addDynamicListener(selector, eventType, callback, scope) {
         const eventConfig = {
             selector: selector,
-            callback: callback.bind(scope || this)
+            callback: callback.bind(scope || this),
+            scope: scope || this,
         };
 
         if (Object.prototype.hasOwnProperty.call(this.dynamicHandlers, eventType)) {
