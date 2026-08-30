@@ -201,7 +201,8 @@ function applyRecipePatch(snapshot, commands, createStepId) {
 
     const steps = snapshot.steps.map(copyRecipeStep),
         stepIds = new Set(steps.map(step => step.stepId)),
-        insertedSteps = [];
+        insertedSteps = [],
+        actions = [];
     if (stepIds.size !== steps.length) {
         throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_RECIPE);
     }
@@ -247,6 +248,7 @@ function applyRecipePatch(snapshot, commands, createStepId) {
             steps.splice(anchor?.index ?? steps.length, 0, step);
             stepIds.add(stepId);
             insertedSteps.push(Object.freeze({commandIndex, stepId}));
+            actions.push(Object.freeze({commandIndex, type, operationName: command.operation}));
             continue;
         }
 
@@ -275,6 +277,7 @@ function applyRecipePatch(snapshot, commands, createStepId) {
                     RECIPE_PATCH_ERROR_CODE.ANCHOR_NOT_FOUND
                 ) + (Object.prototype.hasOwnProperty.call(command, "afterStepId") ? 1 : 0);
             steps.splice(insertionIndex, 0, step);
+            actions.push(Object.freeze({commandIndex, type, operationName: step.operation.op}));
             continue;
         }
 
@@ -309,6 +312,7 @@ function applyRecipePatch(snapshot, commands, createStepId) {
             }
             step.operation.args[command.argumentIndex] = command.value;
         }
+        actions.push(Object.freeze({commandIndex, type, operationName: step.operation.op}));
     }
 
     return Object.freeze({
@@ -320,6 +324,7 @@ function applyRecipePatch(snapshot, commands, createStepId) {
             }),
         }))),
         insertedSteps: Object.freeze(insertedSteps),
+        actions: Object.freeze(actions),
     });
 }
 

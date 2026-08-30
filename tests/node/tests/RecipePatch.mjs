@@ -66,6 +66,15 @@ TestRegister.addApiTests([
             step("draft-step-1", operation("To Hex", ["Space", 0])),
         ]);
         assert.deepStrictEqual(result.insertedSteps, [{commandIndex: 6, stepId: "draft-step-1"}]);
+        assert.deepStrictEqual(result.actions, [
+            {commandIndex: 0, type: "setArgument", operationName: "To Base64"},
+            {commandIndex: 1, type: "disable", operationName: "To Base64"},
+            {commandIndex: 2, type: "enable", operationName: "To Base64"},
+            {commandIndex: 3, type: "setBreakpoint", operationName: "From Hex"},
+            {commandIndex: 4, type: "move", operationName: "From Hex"},
+            {commandIndex: 5, type: "remove", operationName: "To Base64"},
+            {commandIndex: 6, type: "insert", operationName: "To Hex"},
+        ]);
         assert.deepStrictEqual(initial.steps, [
             step("duplicate-a", operation("To Base64", ["A-Za-z0-9+/="])),
             step("duplicate-b", operation("To Base64", ["A-Za-z0-9-_="])),
