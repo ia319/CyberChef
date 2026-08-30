@@ -823,6 +823,22 @@ class App {
 
 
     /**
+     * Publishes a user Revert without scheduling Auto Bake.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    revertRecipeTransactionCommitted(change) {
+        cancelDebounce("stateChange");
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        this.updateURL(true, null, true);
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+    }
+
+
+    /**
      * Publishes the visible effects of one committed user Recipe transaction.
      *
      * @param {Object} change - Trusted structured Recipe change.

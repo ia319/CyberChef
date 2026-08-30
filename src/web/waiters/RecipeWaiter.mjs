@@ -520,6 +520,31 @@ class RecipeWaiter {
 
 
     /**
+     * Returns whether the most recent Agent Recipe change can be restored.
+     *
+     * @returns {Object} Bounded Revert availability.
+     */
+    getAgentRevertState() {
+        return this.transaction.getAgentRevertState();
+    }
+
+
+    /**
+     * Restores the Recipe before the most recent Agent patch.
+     *
+     * @returns {Object} Bounded transaction result.
+     */
+    revertAgentPatch() {
+        const result = this.transaction.revertAgentPatch();
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.app.revertRecipeTransactionCommitted(result.change);
+            this.adjustWidth();
+        }
+        return result;
+    }
+
+
+    /**
      * Moves or removes the breakpoint indicator in the recipe based on the position.
      *
      * @param {number|boolean} position - If boolean, turn off all indicators

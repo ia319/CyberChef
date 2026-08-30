@@ -4,6 +4,7 @@ import {
     RECIPE_TRANSACTION_ERROR_CODE,
     RECIPE_TRANSACTION_SOURCE,
     RECIPE_TRANSACTION_STATUS,
+    RECIPE_REVERT_REASON,
     RecipeTransaction,
     RecipeTransactionError,
 } from "../../../src/web/recipe/RecipeTransaction.mjs";
@@ -247,5 +248,85 @@ TestRegister.addApiTests([
         assert.equal(result.change.actor, "system");
         assert.equal(result.change.source, "url");
         assert.throws(() => transaction.commitSystemProjection([], "api"), TypeError);
+    }),
+
+    it("RecipeTransaction: should restore one Agent patch with user Revert authority", () => {
+        const original = operation("Register", ["R0", "{0}"]),
+            {model, stepIds} = createModel([original]),
+            adapter = createProjectionAdapter(model.getSnapshot().steps),
+            transaction = new RecipeTransaction(model, adapter),
+            agentResult = transaction.applyAgentPatch({
+                expectedRevision: 1,
+                changes: [{type: "disable", stepId: stepIds[0]}],
+            }),
+            available = transaction.getAgentRevertState(),
+            revertResult = transaction.revertAgentPatch();
+
+        assert.deepStrictEqual(available, {
+            available: true,
+            changeId: agentResult.change.changeId,
+            afterRevision: 2,
+        });
+        assert.equal(revertResult.status, RECIPE_TRANSACTION_STATUS.COMMITTED);
+        assert.equal(revertResult.change.actor, "user");
+        assert.equal(revertResult.change.source, "revert");
+        assert.equal(revertResult.change.beforeRevision, 2);
+        assert.equal(revertResult.change.afterRevision, 3);
+        assert.deepStrictEqual(model.exportConfig(), [original]);
+        assert.deepStrictEqual(transaction.getAgentRevertState(), {
+            available: false,
+            reason: RECIPE_REVERT_REASON.ALREADY_USED,
+        });
+        assertTransactionError(
+            () => transaction.revertAgentPatch(),
+            RECIPE_TRANSACTION_ERROR_CODE.REVERT_UNAVAILABLE
+        );
+    }),
+
+    it("RecipeTransaction: should invalidate Revert after a later user change", () => {
+        const {model, stepIds} = createModel([operation("From Hex", ["Auto"])]),
+            adapter = createProjectionAdapter(model.getSnapshot().steps),
+            transaction = new RecipeTransaction(model, adapter);
+        transaction.applyAgentPatch({
+            expectedRevision: 1,
+            changes: [{type: "disable", stepId: stepIds[0]}],
+        });
+        transaction.commitUserProjection([
+            projectedStep(stepIds[0], operation("From Hex", ["Auto"], {disabled: true, breakpoint: true})),
+        ], RECIPE_TRANSACTION_SOURCE.BREAKPOINT);
+
+        assert.deepStrictEqual(transaction.getAgentRevertState(), {
+            available: false,
+            reason: RECIPE_REVERT_REASON.RECIPE_CHANGED,
+        });
+        assertTransactionError(
+            () => transaction.revertAgentPatch(),
+            RECIPE_TRANSACTION_ERROR_CODE.REVERT_UNAVAILABLE
+        );
+        assert.equal(model.getSnapshot().recipeRevision, 3);
+    }),
+
+    it("RecipeTransaction: should retain Revert after a projection failure", () => {
+        const {model, stepIds} = createModel([operation("From Hex", ["Auto"])]),
+            faults = {},
+            adapter = createProjectionAdapter(model.getSnapshot().steps, faults),
+            transaction = new RecipeTransaction(model, adapter);
+        transaction.applyAgentPatch({
+            expectedRevision: 1,
+            changes: [{type: "disable", stepId: stepIds[0]}],
+        });
+        const before = model.getSnapshot();
+        faults.prepare = true;
+
+        assertTransactionError(
+            () => transaction.revertAgentPatch(),
+            RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED
+        );
+        assert.strictEqual(model.getSnapshot().steps, before.steps);
+        assert.equal(model.getSnapshot().recipeRevision, before.recipeRevision);
+        assert.equal(transaction.getAgentRevertState().available, true);
+
+        faults.prepare = false;
+        assert.equal(transaction.revertAgentPatch().status, RECIPE_TRANSACTION_STATUS.COMMITTED);
     }),
 ]);

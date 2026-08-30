@@ -31,6 +31,7 @@ const RECIPE_TRANSACTION_SOURCE = Object.freeze({
     API: "api",
     SAVED_RECIPE: "savedRecipe",
     MAGIC: "magic",
+    REVERT: "revert",
     URL: "url",
 });
 
@@ -64,6 +65,14 @@ const RECIPE_TRANSACTION_ERROR_CODE = Object.freeze({
     BAKE_BUSY: "BAKE_BUSY",
     PROJECTION_FAILED: "PROJECTION_FAILED",
     ROLLBACK_FAILED: "ROLLBACK_FAILED",
+    REVERT_STALE: "REVERT_STALE",
+    REVERT_UNAVAILABLE: "REVERT_UNAVAILABLE",
+});
+
+const RECIPE_REVERT_REASON = Object.freeze({
+    ALREADY_USED: "ALREADY_USED",
+    NO_AGENT_CHANGE: "NO_AGENT_CHANGE",
+    RECIPE_CHANGED: "RECIPE_CHANGED",
 });
 
 const APPLY_RECIPE_PATCH_SCHEMA = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH].inputSchema;
@@ -143,6 +152,8 @@ class RecipeTransaction {
     #projectionAdapter;
     #nextStepNumber;
     #nextChangeNumber;
+    #agentRevertSnapshot;
+    #agentRevertReason;
 
     /**
      * Creates a Recipe transaction owner.
@@ -162,6 +173,8 @@ class RecipeTransaction {
         this.#projectionAdapter = projectionAdapter;
         this.#nextStepNumber = 0;
         this.#nextChangeNumber = 0;
+        this.#agentRevertSnapshot = null;
+        this.#agentRevertReason = RECIPE_REVERT_REASON.NO_AGENT_CHANGE;
     }
 
 
@@ -280,12 +293,17 @@ class RecipeTransaction {
         }
         const snapshot = this.#model.getSnapshot(),
             preparedModel = this.#model.prepareProjectedSteps(projectedSteps);
-        return this.#commitPreparedModel(
+        const result = this.#commitPreparedModel(
             preparedModel,
             snapshot,
             RECIPE_TRANSACTION_ACTOR.USER,
             source
         );
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.#agentRevertSnapshot = null;
+            this.#agentRevertReason = RECIPE_REVERT_REASON.RECIPE_CHANGED;
+        }
+        return result;
     }
 
 
@@ -302,12 +320,79 @@ class RecipeTransaction {
         }
         const snapshot = this.#model.getSnapshot(),
             preparedModel = this.#model.prepareProjectedSteps(projectedSteps);
-        return this.#commitPreparedModel(
+        const result = this.#commitPreparedModel(
             preparedModel,
             snapshot,
             RECIPE_TRANSACTION_ACTOR.SYSTEM,
             source
         );
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.#agentRevertSnapshot = null;
+            this.#agentRevertReason = RECIPE_REVERT_REASON.RECIPE_CHANGED;
+        }
+        return result;
+    }
+
+
+    /**
+     * Returns bounded availability for the latest Agent change snapshot.
+     *
+     * @returns {Object} Availability without Recipe content.
+     */
+    getAgentRevertState() {
+        if (!this.#agentRevertSnapshot) {
+            return Object.freeze({available: false, reason: this.#agentRevertReason});
+        }
+        if (this.#model.getSnapshot().recipeRevision !== this.#agentRevertSnapshot.afterRevision) {
+            return Object.freeze({
+                available: false,
+                reason: RECIPE_REVERT_REASON.RECIPE_CHANGED,
+            });
+        }
+        return Object.freeze({
+            available: true,
+            changeId: this.#agentRevertSnapshot.changeId,
+            afterRevision: this.#agentRevertSnapshot.afterRevision,
+        });
+    }
+
+
+    /**
+     * Restores the Recipe before the latest Agent patch at its exact revision.
+     *
+     * @returns {Object} Immutable user-attributed transaction result.
+     * @throws {RecipeTransactionError} When the snapshot is unavailable, stale, or cannot be projected.
+     */
+    revertAgentPatch() {
+        const revertSnapshot = this.#agentRevertSnapshot;
+        if (!revertSnapshot) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.REVERT_UNAVAILABLE);
+        }
+
+        const currentSnapshot = this.#model.getSnapshot();
+        if (currentSnapshot.recipeRevision !== revertSnapshot.afterRevision) {
+            this.#agentRevertSnapshot = null;
+            this.#agentRevertReason = RECIPE_REVERT_REASON.RECIPE_CHANGED;
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.REVERT_STALE);
+        }
+
+        let preparedModel;
+        try {
+            preparedModel = this.#model.prepareProjectedSteps(revertSnapshot.steps);
+        } catch (err) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
+        }
+        const result = this.#publishPreparedModel(
+            preparedModel,
+            currentSnapshot,
+            RECIPE_TRANSACTION_ACTOR.USER,
+            RECIPE_TRANSACTION_SOURCE.REVERT
+        );
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.#agentRevertSnapshot = null;
+            this.#agentRevertReason = RECIPE_REVERT_REASON.ALREADY_USED;
+        }
+        return result;
     }
 
 
@@ -382,6 +467,13 @@ class RecipeTransaction {
         );
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
             this.#nextStepNumber = draftStepNumber;
+            this.#agentRevertSnapshot = Object.freeze({
+                changeId: result.change.changeId,
+                beforeRevision: snapshot.recipeRevision,
+                afterRevision: result.recipeRevision,
+                steps: snapshot.steps,
+            });
+            this.#agentRevertReason = null;
         }
         return result;
     }
@@ -392,6 +484,7 @@ export {
     RECIPE_TRANSACTION_ERROR_CODE,
     RECIPE_TRANSACTION_SOURCE,
     RECIPE_TRANSACTION_STATUS,
+    RECIPE_REVERT_REASON,
     RecipeTransaction,
     RecipeTransactionError,
 };

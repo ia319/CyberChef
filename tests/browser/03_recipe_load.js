@@ -307,6 +307,73 @@ module.exports = {
             browser.assert.strictEqual(value.firstStepCollapsed, true);
             browser.assert.strictEqual(value.urlContainsRuntimeId, false);
         });
+    },
+
+    "User Revert restores the latest Agent Recipe without Auto Bake": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                recipe = app.manager.recipe,
+                agentRecord = window.__agentRecipeTransaction,
+                revertStateBefore = recipe.getAgentRevertState(),
+                bakeId = app.manager.worker.bakeId;
+
+            window.__revertRecipeEvents = [];
+            window.addEventListener("recipechange", event => {
+                window.__revertRecipeEvents.push(event.detail);
+            }, {once: true});
+
+            const result = recipe.revertAgentPatch();
+            let secondErrorCode = null;
+            try {
+                recipe.revertAgentPatch();
+            } catch (err) {
+                secondErrorCode = err.code;
+            }
+            window.__revertRecipeTransaction = {
+                result,
+                revertStateBefore,
+                revertStateAfter: recipe.getAgentRevertState(),
+                bakeId,
+                secondErrorCode,
+                firstStepId: agentRecord.firstStepId,
+                secondStepId: agentRecord.secondStepId,
+            };
+        });
+
+        browser.pause(100).execute(() => {
+            const app = window.app,
+                recipe = app.manager.recipe,
+                record = window.__revertRecipeTransaction,
+                projection = recipe.getReadProjection();
+            return {
+                ...record,
+                recipeRevision: projection.recipeRevision,
+                stepIds: projection.steps.map(step => step.stepId),
+                config: recipe.getConfig(),
+                bakeIdAfter: app.manager.worker.bakeId,
+                outputStatuses: Object.values(app.manager.output.outputs).map(output => output.status),
+                eventCount: window.__revertRecipeEvents.length,
+                event: window.__revertRecipeEvents[0],
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.revertStateBefore.available, true);
+            browser.assert.strictEqual(value.result.status, "committed");
+            browser.assert.strictEqual(value.result.change.actor, "user");
+            browser.assert.strictEqual(value.result.change.source, "revert");
+            browser.assert.strictEqual(value.result.change.afterRevision, value.recipeRevision);
+            browser.assert.deepStrictEqual(value.stepIds, [value.firstStepId, value.secondStepId]);
+            browser.assert.deepStrictEqual(value.config, [
+                {op: "To Base64", args: ["A-Za-z0-9+/="]},
+                {op: "To Base64", args: ["A-Za-z0-9+/="]},
+            ]);
+            browser.assert.strictEqual(value.bakeIdAfter, value.bakeId);
+            browser.assert.strictEqual(value.outputStatuses.every(status => status === "stale"), true);
+            browser.assert.strictEqual(value.eventCount, 1);
+            browser.assert.deepStrictEqual(value.event, value.result.change);
+            browser.assert.strictEqual(value.revertStateAfter.available, false);
+            browser.assert.strictEqual(value.revertStateAfter.reason, "ALREADY_USED");
+            browser.assert.strictEqual(value.secondErrorCode, "REVERT_UNAVAILABLE");
+        });
 
         browser.execute(() => {
             const recipe = window.app.manager.recipe,
