@@ -4,6 +4,9 @@
  * @license Apache-2.0
  */
 
+import {RECIPE_TRANSACTION_SOURCE} from "../recipe/RecipeTransaction.mjs";
+
+
 /**
  * Waiter to handle keybindings to CyberChef functions (i.e. Bake, Step, Save, Load etc.)
  */
@@ -25,7 +28,7 @@ class BindingsWaiter {
      * Handler for all keydown events
      * Checks whether valid keyboard shortcut has been instated
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     parseInput(e) {
@@ -72,7 +75,7 @@ class BindingsWaiter {
                             elem.setAttribute("break", "false"); // remove break point if already enabled
                             elem.classList.remove("breakpoint-selected");
                         }
-                        window.dispatchEvent(this.manager.statechange);
+                        this.manager.recipe.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.KEYBOARD);
                     } catch (e) {
                         // do nothing, just don't throw an error
                     }
@@ -91,7 +94,7 @@ class BindingsWaiter {
                             elem.parentNode.parentNode.classList.remove("disabled");
                         }
                         this.app.progress = 0;
-                        window.dispatchEvent(this.manager.statechange);
+                        this.manager.recipe.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.KEYBOARD);
                     } catch (e) {
                         // do nothing, just don't throw an error
                     }
@@ -106,7 +109,7 @@ class BindingsWaiter {
                     break;
                 case "KeyC": // Clear recipe
                     e.preventDefault();
-                    this.manager.recipe.clearRecipe();
+                    this.manager.recipe.clearRecipe(RECIPE_TRANSACTION_SOURCE.KEYBOARD);
                     break;
                 case "KeyS": // Save output to file
                     e.preventDefault();

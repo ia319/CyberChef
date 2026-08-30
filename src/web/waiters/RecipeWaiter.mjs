@@ -13,6 +13,7 @@ import RecipeDOMProjection from "../recipe/RecipeDOMProjection.mjs";
 import {RecipeModel} from "../recipe/RecipeModel.mjs";
 import {
     RECIPE_TRANSACTION_ERROR_CODE,
+    RECIPE_TRANSACTION_SOURCE,
     RECIPE_TRANSACTION_STATUS,
     RecipeTransaction,
     RecipeTransactionError,
@@ -36,10 +37,8 @@ class RecipeWaiter {
         this.removeIntent = false;
         this.model = new RecipeModel();
         this.modelSyncDepth = 0;
-        this.transaction = new RecipeTransaction(
-            this.model,
-            new RecipeDOMProjection(this.app, this.manager)
-        );
+        this.domProjection = new RecipeDOMProjection(this.app, this.manager);
+        this.transaction = new RecipeTransaction(this.model, this.domProjection);
     }
 
 
@@ -64,11 +63,8 @@ class RecipeWaiter {
                 if (this.removeIntent) {
                     evt.item.remove();
                     evt.target.dispatchEvent(this.manager.operationremove);
-                }
-            }.bind(this),
-            onSort: function(evt) {
-                if (evt.from.id === "rec-list") {
-                    document.dispatchEvent(this.manager.statechange);
+                } else if (evt.from.id === "rec-list" && evt.oldIndex !== evt.newIndex) {
+                    this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.SORT);
                 }
             }.bind(this)
         });
@@ -223,18 +219,17 @@ class RecipeWaiter {
     /**
      * Handler for ingredient change events.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      */
     ingChange(e) {
         if (e && e?.target?.classList?.contains("no-state-change")) return;
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.INGREDIENT);
     }
 
     /**
      * Handler for hide-args click events.
      * Updates the icon status.
      *
-     * @fires Manager#statechange
      * @param {event} e
      */
     hideArgsClick(e) {
@@ -267,14 +262,13 @@ class RecipeWaiter {
             }
         }
 
-        window.dispatchEvent(this.manager.statechange);
     }
 
     /**
      * Handler for disable click events.
      * Updates the icon status.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     disableClick(e) {
@@ -291,7 +285,7 @@ class RecipeWaiter {
         }
 
         this.app.progress = 0;
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.DISABLE);
     }
 
 
@@ -299,7 +293,7 @@ class RecipeWaiter {
      * Handler for breakpoint click events.
      * Updates the icon status.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     breakpointClick(e) {
@@ -313,7 +307,7 @@ class RecipeWaiter {
             bp.classList.remove("breakpoint-selected");
         }
 
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.BREAKPOINT);
     }
 
 
@@ -321,7 +315,7 @@ class RecipeWaiter {
      * Handler for operation doubleclick events.
      * Removes the operation from the recipe and auto bakes.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     operationDblclick(e) {
@@ -334,7 +328,7 @@ class RecipeWaiter {
      * Handler for operation child doubleclick events.
      * Removes the operation from the recipe.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     operationChildDblclick(e) {
@@ -401,13 +395,66 @@ class RecipeWaiter {
 
 
     /**
-     * Synchronizes visible Recipe semantics into the in-memory model.
+     * Commits a user-visible DOM mutation through the shared Recipe transaction.
      *
-     * @returns {Object|null} Commit result, or null while a DOM batch is active.
+     * @param {string} source - Trusted user mutation source.
+     * @returns {Object|null} Transaction result, or null while a DOM batch is active.
      */
-    syncModelFromDOM() {
+    commitUserDOMChange(source) {
+        return this.commitTrustedDOMChange(source, false);
+    }
+
+
+    /**
+     * Commits a system-loaded DOM mutation through the shared Recipe transaction.
+     *
+     * @param {string} source - Trusted system mutation source.
+     * @returns {Object|null} Transaction result, or null while a DOM batch is active.
+     */
+    commitSystemDOMChange(source) {
+        return this.commitTrustedDOMChange(source, true);
+    }
+
+
+    /**
+     * Commits a trusted visible DOM projection and restores model state on failure.
+     *
+     * @param {string} source - Trusted mutation source.
+     * @param {boolean} system - Whether the mutation belongs to system initialization.
+     * @returns {Object|null} Transaction result, or null while a DOM batch is active.
+     */
+    commitTrustedDOMChange(source, system) {
         if (this.modelSyncDepth > 0) return null;
-        return this.model.commitProjectedSteps(this.getDOMProjection());
+
+        let result;
+        try {
+            const projectedSteps = this.getDOMProjection();
+            result = system ?
+                this.transaction.commitSystemProjection(projectedSteps, source) :
+                this.transaction.commitUserProjection(projectedSteps, source);
+        } catch (err) {
+            this.#restoreDOMFromModel();
+            throw err;
+        }
+
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            if (system) this.app.systemRecipeTransactionCommitted(result.change);
+            else this.app.userRecipeTransactionCommitted(result.change);
+            this.adjustWidth();
+        }
+        return result;
+    }
+
+
+    /**
+     * Restores the visible Recipe after a trusted DOM mutation fails.
+     */
+    #restoreDOMFromModel() {
+        try {
+            this.domProjection.prepare(this.model.getSnapshot().steps).publish();
+        } catch (err) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.ROLLBACK_FAILED);
+        }
     }
 
 
@@ -421,14 +468,13 @@ class RecipeWaiter {
         if (typeof callback !== "function") throw new TypeError("Recipe DOM batch requires a callback");
 
         this.modelSyncDepth++;
-        let completed = false;
         try {
-            const result = callback();
-            completed = true;
-            return result;
+            return callback();
+        } catch (err) {
+            if (this.modelSyncDepth === 1) this.#restoreDOMFromModel();
+            throw err;
         } finally {
             this.modelSyncDepth--;
-            if (completed && this.modelSyncDepth === 0) this.syncModelFromDOM();
         }
     }
 
@@ -542,14 +588,15 @@ class RecipeWaiter {
     /**
      * Removes all operations from the recipe.
      *
-     * @fires Manager#operationremove
+     * @fires Window#recipechange
+     * @param {string} [source=RECIPE_TRANSACTION_SOURCE.CLEAR] - Trusted user mutation source.
      */
-    clearRecipe() {
+    clearRecipe(source=RECIPE_TRANSACTION_SOURCE.CLEAR) {
         const recList = document.getElementById("rec-list");
         while (recList.firstChild) {
             recList.removeChild(recList.firstChild);
         }
-        recList.dispatchEvent(this.manager.operationremove);
+        this.commitUserDOMChange(source);
     }
 
 
@@ -600,7 +647,7 @@ class RecipeWaiter {
      * Handler for operationadd events.
      *
      * @listens Manager#operationadd
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     opAdd(e) {
@@ -608,8 +655,8 @@ class RecipeWaiter {
 
         this.batchDOMChanges(() => {
             this.triggerArgEvents(e.target);
-            window.dispatchEvent(this.manager.statechange);
         });
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.INSERT);
     }
 
 
@@ -617,12 +664,12 @@ class RecipeWaiter {
      * Handler for operationremove events.
      *
      * @listens Manager#operationremove
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     opRemove(e) {
         log.debug("Operation removed from recipe");
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.REMOVE);
     }
 
 
@@ -689,7 +736,7 @@ class RecipeWaiter {
                 // Trigger floating label move
                 const changeEvent = new Event("change");
                 targ.dispatchEvent(changeEvent);
-                window.dispatchEvent(self.manager.statechange);
+                self.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.INGREDIENT);
             };
             reader.readAsText(file);
         }

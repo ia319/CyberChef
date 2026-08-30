@@ -14,11 +14,43 @@ import {validateToolInput} from "../webmcp/ToolInput.mjs";
 
 const RECIPE_TRANSACTION_ACTOR = Object.freeze({
     AGENT: "agent",
+    SYSTEM: "system",
+    USER: "user",
 });
 
 const RECIPE_TRANSACTION_SOURCE = Object.freeze({
     WEBMCP: "webmcp",
+    INGREDIENT: "ingredient",
+    SORT: "sort",
+    INSERT: "insert",
+    REMOVE: "remove",
+    CLEAR: "clear",
+    DISABLE: "disable",
+    BREAKPOINT: "breakpoint",
+    KEYBOARD: "keyboard",
+    API: "api",
+    SAVED_RECIPE: "savedRecipe",
+    MAGIC: "magic",
+    URL: "url",
 });
+
+const USER_TRANSACTION_SOURCES = new Set([
+    RECIPE_TRANSACTION_SOURCE.INGREDIENT,
+    RECIPE_TRANSACTION_SOURCE.SORT,
+    RECIPE_TRANSACTION_SOURCE.INSERT,
+    RECIPE_TRANSACTION_SOURCE.REMOVE,
+    RECIPE_TRANSACTION_SOURCE.CLEAR,
+    RECIPE_TRANSACTION_SOURCE.DISABLE,
+    RECIPE_TRANSACTION_SOURCE.BREAKPOINT,
+    RECIPE_TRANSACTION_SOURCE.KEYBOARD,
+    RECIPE_TRANSACTION_SOURCE.API,
+    RECIPE_TRANSACTION_SOURCE.SAVED_RECIPE,
+    RECIPE_TRANSACTION_SOURCE.MAGIC,
+]);
+
+const SYSTEM_TRANSACTION_SOURCES = new Set([
+    RECIPE_TRANSACTION_SOURCE.URL,
+]);
 
 const RECIPE_TRANSACTION_STATUS = Object.freeze({
     COMMITTED: "committed",
@@ -104,7 +136,7 @@ function normalizeAgentChanges(changes) {
 
 
 /**
- * Runs synchronous Recipe validation and publication for Agent patches.
+ * Owns synchronous Recipe validation, attribution, and publication.
  */
 class RecipeTransaction {
     #model;
@@ -130,6 +162,152 @@ class RecipeTransaction {
         this.#projectionAdapter = projectionAdapter;
         this.#nextStepNumber = 0;
         this.#nextChangeNumber = 0;
+    }
+
+
+    /**
+     * Commits a prepared Recipe model and creates its structured change.
+     *
+     * @param {Object} preparedModel - One-use prepared RecipeModel projection.
+     * @param {Object} snapshot - Pre-change Recipe model snapshot.
+     * @param {string} actor - Trusted transaction actor.
+     * @param {string} source - Trusted transaction source.
+     * @param {Object[]} [insertedSteps=[]] - Inserted command identities.
+     * @returns {Object} Immutable transaction result.
+     */
+    #commitPreparedModel(preparedModel, snapshot, actor, source, insertedSteps=[]) {
+        this.#model.commitPreparedProjection(preparedModel);
+        if (!preparedModel.changed) {
+            return Object.freeze({
+                status: RECIPE_TRANSACTION_STATUS.UNCHANGED,
+                recipeRevision: snapshot.recipeRevision,
+                insertedSteps: Object.freeze([]),
+            });
+        }
+
+        const afterRevision = this.#model.getSnapshot().recipeRevision,
+            change = Object.freeze({
+                changeId: `recipe-change-${++this.#nextChangeNumber}`,
+                actor,
+                source,
+                beforeRevision: snapshot.recipeRevision,
+                afterRevision,
+            });
+        return Object.freeze({
+            status: RECIPE_TRANSACTION_STATUS.COMMITTED,
+            recipeRevision: afterRevision,
+            insertedSteps,
+            change,
+        });
+    }
+
+
+    /**
+     * Publishes one prepared model and its structured change exactly once.
+     *
+     * @param {Object} preparedModel - One-use prepared RecipeModel projection.
+     * @param {Object} snapshot - Pre-change Recipe model snapshot.
+     * @param {string} actor - Trusted transaction actor.
+     * @param {string} source - Trusted transaction source.
+     * @param {Object[]} [insertedSteps=[]] - Inserted command identities.
+     * @returns {Object} Immutable transaction result.
+     */
+    #publishPreparedModel(preparedModel, snapshot, actor, source, insertedSteps=[]) {
+        if (!preparedModel.changed) {
+            return this.#commitPreparedModel(preparedModel, snapshot, actor, source, insertedSteps);
+        }
+
+        let preparedProjection;
+        try {
+            preparedProjection = this.#projectionAdapter.prepare(preparedModel.steps);
+        } catch (err) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
+        }
+        if (!preparedProjection || typeof preparedProjection !== "object" ||
+            typeof preparedProjection.publish !== "function" ||
+            typeof preparedProjection.rollback !== "function" ||
+            typeof preparedProjection.then === "function") {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
+        }
+        if (this.#model.getSnapshot().recipeRevision !== snapshot.recipeRevision) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
+        }
+
+        let publicationStarted = false;
+        try {
+            publicationStarted = true;
+            const publicationResult = preparedProjection.publish();
+            if (publicationResult && typeof publicationResult.then === "function") {
+                throw new TypeError("Recipe projection publication must be synchronous");
+            }
+            return this.#commitPreparedModel(
+                preparedModel,
+                snapshot,
+                actor,
+                source,
+                insertedSteps
+            );
+        } catch (err) {
+            let rollbackFailed = false;
+            if (publicationStarted) {
+                try {
+                    preparedProjection.rollback();
+                } catch (rollbackErr) {
+                    rollbackFailed = true;
+                }
+            }
+            if (rollbackFailed) {
+                throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.ROLLBACK_FAILED);
+            }
+            const code = err instanceof RangeError ?
+                RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE :
+                RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED;
+            throw new RecipeTransactionError(code);
+        }
+    }
+
+
+    /**
+     * Commits a visible user Recipe projection without applying Agent policy.
+     *
+     * @param {Object[]} projectedSteps - Complete visible Recipe projection.
+     * @param {string} source - Trusted user mutation source.
+     * @returns {Object} Immutable transaction result.
+     */
+    commitUserProjection(projectedSteps, source) {
+        if (!USER_TRANSACTION_SOURCES.has(source)) {
+            throw new TypeError("User Recipe transaction source is invalid");
+        }
+        const snapshot = this.#model.getSnapshot(),
+            preparedModel = this.#model.prepareProjectedSteps(projectedSteps);
+        return this.#commitPreparedModel(
+            preparedModel,
+            snapshot,
+            RECIPE_TRANSACTION_ACTOR.USER,
+            source
+        );
+    }
+
+
+    /**
+     * Commits a system-loaded Recipe projection with fixed attribution.
+     *
+     * @param {Object[]} projectedSteps - Complete visible Recipe projection.
+     * @param {string} source - Trusted system mutation source.
+     * @returns {Object} Immutable transaction result.
+     */
+    commitSystemProjection(projectedSteps, source) {
+        if (!SYSTEM_TRANSACTION_SOURCES.has(source)) {
+            throw new TypeError("System Recipe transaction source is invalid");
+        }
+        const snapshot = this.#model.getSnapshot(),
+            preparedModel = this.#model.prepareProjectedSteps(projectedSteps);
+        return this.#commitPreparedModel(
+            preparedModel,
+            snapshot,
+            RECIPE_TRANSACTION_ACTOR.SYSTEM,
+            source
+        );
     }
 
 
@@ -195,71 +373,17 @@ class RecipeTransaction {
 
         const newStepIds = patch.insertedSteps.map(item => item.stepId),
             preparedModel = this.#model.prepareProjectedSteps(patch.steps, newStepIds);
-        if (!preparedModel.changed) {
-            return Object.freeze({
-                status: RECIPE_TRANSACTION_STATUS.UNCHANGED,
-                recipeRevision: snapshot.recipeRevision,
-                insertedSteps: Object.freeze([]),
-            });
+        const result = this.#publishPreparedModel(
+            preparedModel,
+            snapshot,
+            RECIPE_TRANSACTION_ACTOR.AGENT,
+            RECIPE_TRANSACTION_SOURCE.WEBMCP,
+            patch.insertedSteps
+        );
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.#nextStepNumber = draftStepNumber;
         }
-
-        let preparedProjection;
-        try {
-            preparedProjection = this.#projectionAdapter.prepare(preparedModel.steps);
-        } catch (err) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
-        }
-        if (!preparedProjection || typeof preparedProjection !== "object" ||
-            typeof preparedProjection.publish !== "function" ||
-            typeof preparedProjection.rollback !== "function" ||
-            typeof preparedProjection.then === "function") {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED);
-        }
-        if (this.#model.getSnapshot().recipeRevision !== validation.value.expectedRevision) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
-        }
-
-        let publicationStarted = false;
-        try {
-            publicationStarted = true;
-            const publicationResult = preparedProjection.publish();
-            if (publicationResult && typeof publicationResult.then === "function") {
-                throw new TypeError("Recipe projection publication must be synchronous");
-            }
-            this.#model.commitPreparedProjection(preparedModel);
-        } catch (err) {
-            let rollbackFailed = false;
-            if (publicationStarted) {
-                try {
-                    preparedProjection.rollback();
-                } catch (rollbackErr) {
-                    rollbackFailed = true;
-                }
-            }
-            if (rollbackFailed) {
-                throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.ROLLBACK_FAILED);
-            }
-            const code = err instanceof RangeError ?
-                RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE :
-                RECIPE_TRANSACTION_ERROR_CODE.PROJECTION_FAILED;
-            throw new RecipeTransactionError(code);
-        }
-
-        const afterRevision = this.#model.getSnapshot().recipeRevision,
-            change = Object.freeze({
-                changeId: `recipe-change-${++this.#nextChangeNumber}`,
-                actor: RECIPE_TRANSACTION_ACTOR.AGENT,
-                source: RECIPE_TRANSACTION_SOURCE.WEBMCP,
-                beforeRevision: snapshot.recipeRevision,
-                afterRevision,
-            });
-        this.#nextStepNumber = draftStepNumber;
-        return Object.freeze({
-            status: RECIPE_TRANSACTION_STATUS.COMMITTED,
-            recipeRevision: afterRevision,
-            insertedSteps: patch.insertedSteps,
-            change,
-        });
+        return result;
     }
 }
 

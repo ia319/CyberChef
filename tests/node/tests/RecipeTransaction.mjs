@@ -2,6 +2,7 @@ import assert from "assert";
 import {RecipeModel} from "../../../src/web/recipe/RecipeModel.mjs";
 import {
     RECIPE_TRANSACTION_ERROR_CODE,
+    RECIPE_TRANSACTION_SOURCE,
     RECIPE_TRANSACTION_STATUS,
     RecipeTransaction,
     RecipeTransactionError,
@@ -208,5 +209,43 @@ TestRegister.addApiTests([
         assert.equal(result.status, RECIPE_TRANSACTION_STATUS.UNCHANGED);
         assert.equal(result.recipeRevision, 1);
         assert.equal(adapter.getState().prepareCount, 0);
+    }),
+
+    it("RecipeTransaction: should preserve user authority with trusted attribution", () => {
+        const {model, stepIds} = createModel([
+                operation("Register", ["R0", "{0}"], {disabled: true}),
+            ]),
+            adapter = createProjectionAdapter(model.getSnapshot().steps),
+            transaction = new RecipeTransaction(model, adapter),
+            userProjection = [projectedStep(
+                stepIds[0],
+                operation("Register", ["R0", "{0}"])
+            )],
+            result = transaction.commitUserProjection(
+                userProjection,
+                RECIPE_TRANSACTION_SOURCE.DISABLE
+            );
+
+        assert.equal(result.status, RECIPE_TRANSACTION_STATUS.COMMITTED);
+        assert.equal(result.change.actor, "user");
+        assert.equal(result.change.source, "disable");
+        assert.equal(result.change.beforeRevision, 1);
+        assert.equal(result.change.afterRevision, 2);
+        assert.deepStrictEqual(model.exportConfig(), [operation("Register", ["R0", "{0}"])]);
+        assert.equal(adapter.getState().prepareCount, 0);
+        assert.throws(() => transaction.commitUserProjection(userProjection, "webmcp"), TypeError);
+    }),
+
+    it("RecipeTransaction: should attribute trusted system Recipe loads", () => {
+        const {model, stepIds} = createModel([operation("From Hex", ["Auto"])]),
+            adapter = createProjectionAdapter(model.getSnapshot().steps),
+            transaction = new RecipeTransaction(model, adapter),
+            result = transaction.commitSystemProjection([
+                projectedStep(stepIds[0], operation("To Hex", ["Space", 0])),
+            ], RECIPE_TRANSACTION_SOURCE.URL);
+
+        assert.equal(result.change.actor, "system");
+        assert.equal(result.change.source, "url");
+        assert.throws(() => transaction.commitSystemProjection([], "api"), TypeError);
     }),
 ]);

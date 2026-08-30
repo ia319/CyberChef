@@ -47,6 +47,11 @@ module.exports = {
             const recipe = window.app.manager.recipe,
                 beforeReplaceRevision = recipe.getReadProjection().recipeRevision;
 
+            window.__userRecipeChanges = [];
+            window.addEventListener("recipechange", event => {
+                if (event.detail.actor === "user") window.__userRecipeChanges.push(event.detail);
+            });
+
             window.app.setRecipeConfig([
                 {op: "To Base64", args: ["A-Za-z0-9+/="]},
                 {op: "To Base64", args: ["A-Za-z0-9-_"]},
@@ -67,7 +72,7 @@ module.exports = {
             const recipeList = document.getElementById("rec-list"),
                 operations = recipeList.querySelectorAll("li.operation");
             recipeList.insertBefore(operations[1], operations[0]);
-            window.dispatchEvent(window.app.manager.statechange);
+            recipe.commitUserDOMChange("sort");
             const afterMove = recipe.getReadProjection();
 
             firstOperation.querySelector(".disable-icon").click();
@@ -103,6 +108,11 @@ module.exports = {
                 insertedId: afterInsertion.steps.at(-1).stepId,
                 exportedConfig,
                 storedIdentity,
+                changeSources: window.__userRecipeChanges.map(change => change.source),
+                changeRevisions: window.__userRecipeChanges.map(change => [
+                    change.beforeRevision,
+                    change.afterRevision,
+                ]),
             };
         }, [], ({value}) => {
             browser.assert.strictEqual(value.replaceRevisionDelta, 1);
@@ -121,6 +131,19 @@ module.exports = {
             browser.assert.notStrictEqual(value.insertedId, value.loadedIds[1]);
             browser.assert.strictEqual(JSON.stringify(value.exportedConfig).includes("recipe-step-"), false);
             browser.assert.strictEqual(value.storedIdentity, false);
+            browser.assert.deepStrictEqual(value.changeSources, [
+                "api",
+                "ingredient",
+                "sort",
+                "disable",
+                "breakpoint",
+                "remove",
+                "insert",
+            ]);
+            browser.assert.strictEqual(
+                value.changeRevisions.every(revisions => revisions[1] === revisions[0] + 1),
+                true
+            );
         });
 
         browser
@@ -128,6 +151,40 @@ module.exports = {
             .url(function({value}) {
                 browser.assert.strictEqual(value.includes("recipe-step-"), false);
             });
+    },
+
+    "Failed Recipe replacement restores the committed workspace": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                recipe = app.manager.recipe;
+
+            app.setRecipeConfig([{op: "To Hex", args: ["Space", 0]}]);
+            const before = recipe.getReadProjection(),
+                beforeConfig = recipe.getConfig();
+            let errorName = null;
+            try {
+                app.setRecipeConfig([{op: "Unknown operation", args: []}]);
+            } catch (err) {
+                errorName = err.name;
+            }
+
+            return {
+                errorName,
+                beforeRevision: before.recipeRevision,
+                afterRevision: recipe.getReadProjection().recipeRevision,
+                beforeConfig,
+                afterConfig: recipe.getConfig(),
+                visibleOperation: document.querySelector("#rec-list .op-title")?.textContent,
+                visibleStepId: document.querySelector("#rec-list .operation")?.dataset.recipeStepId,
+                expectedStepId: before.steps[0].stepId,
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.errorName, "TypeError");
+            browser.assert.strictEqual(value.afterRevision, value.beforeRevision);
+            browser.assert.deepStrictEqual(value.afterConfig, value.beforeConfig);
+            browser.assert.strictEqual(value.visibleOperation, "To Hex");
+            browser.assert.strictEqual(value.visibleStepId, value.expectedStepId);
+        });
     },
 
     "Agent Recipe transaction publishes once without Auto Bake": browser => {

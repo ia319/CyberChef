@@ -12,6 +12,7 @@ import HTMLOperation from "./HTMLOperation.mjs";
 import Split from "split.js";
 import moment from "moment-timezone";
 import cptable from "codepage";
+import {RECIPE_TRANSACTION_SOURCE} from "./recipe/RecipeTransaction.mjs";
 
 
 /**
@@ -485,6 +486,7 @@ class App {
      *
      * @param {Object} params
      * @fires Manager#statechange
+     * @fires Window#recipechange
      */
     loadURIParams(params=this.getURIParams()) {
         this.uriParams = params;
@@ -493,17 +495,20 @@ class App {
         if (this.uriParams.recipe) {
             try {
                 const recipeConfig = Utils.parseRecipeConfig(this.uriParams.recipe);
-                this.setRecipeConfig(recipeConfig);
+                this.setRecipeConfig(recipeConfig, RECIPE_TRANSACTION_SOURCE.URL);
             } catch (err) {}
         } else if (this.uriParams.op) {
             // If there's no recipe, look for single operations
-            this.manager.recipe.clearRecipe();
+            this.manager.recipe.batchDOMChanges(() => {
+                this.manager.recipe.clearRecipe();
 
-            // Search for nearest match and add it
-            const matchedOps = this.manager.ops.filterOperations(this.uriParams.op, false);
-            if (matchedOps.length) {
-                this.manager.recipe.addOperation(matchedOps[0].name);
-            }
+                // Search for nearest match and add it
+                const matchedOps = this.manager.ops.filterOperations(this.uriParams.op, false);
+                if (matchedOps.length) {
+                    this.manager.recipe.addOperation(matchedOps[0].name);
+                }
+            });
+            this.manager.recipe.commitSystemDOMChange(RECIPE_TRANSACTION_SOURCE.URL);
 
             // Populate search with the string
             const search = document.getElementById("search");
@@ -582,10 +587,11 @@ class App {
     /**
      * Given a recipe configuration, sets the recipe to that configuration.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {Object[]} recipeConfig - The recipe configuration
+     * @param {string} [source=RECIPE_TRANSACTION_SOURCE.API] - Trusted Recipe replacement source.
      */
-    setRecipeConfig(recipeConfig) {
+    setRecipeConfig(recipeConfig, source=RECIPE_TRANSACTION_SOURCE.API) {
         this.manager.recipe.batchDOMChanges(() => {
             document.getElementById("rec-list").innerHTML = null;
 
@@ -624,6 +630,11 @@ class App {
                 this.progress = 0;
             }
         });
+        if (source === RECIPE_TRANSACTION_SOURCE.URL) {
+            this.manager.recipe.commitSystemDOMChange(source);
+        } else {
+            this.manager.recipe.commitUserDOMChange(source);
+        }
     }
 
 
@@ -777,15 +788,12 @@ class App {
 
 
     /**
-     * Handler for CyerChef statechange events.
-     * Fires whenever the input or recipe changes in any way.
+     * Handles general CyberChef state changes outside Recipe transactions.
      *
      * @listens Manager#statechange
      * @param {event} e
      */
     stateChange(e) {
-        this.manager.recipe.syncModelFromDOM();
-
         // Bump the state-change counter synchronously so a manual bake invoked between
         // here and the debounced autoBake firing can record it via bakeStateId.
         this.stateChangeId++;
@@ -810,6 +818,39 @@ class App {
         this.manager.recipe.updateBreakpointIndicator(false);
         this.manager.output.markRecipeStale();
         this.updateURL(true, null, true);
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+    }
+
+
+    /**
+     * Publishes the visible effects of one committed user Recipe transaction.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    userRecipeTransactionCommitted(change) {
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+
+        debounce(function() {
+            this.autoBake();
+            this.updateURL(true, null, true);
+        }, 20, "stateChange", this, [])();
+    }
+
+
+    /**
+     * Publishes one system Recipe transaction without scheduling an additional Bake.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    systemRecipeTransactionCommitted(change) {
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
         window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
     }
 

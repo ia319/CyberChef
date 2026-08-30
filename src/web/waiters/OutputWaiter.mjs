@@ -39,6 +39,7 @@ import {
 import {statusBar} from "../utils/statusBar.mjs";
 import {htmlPlugin} from "../utils/htmlWidget.mjs";
 import {copyOverride} from "../utils/copyOverride.mjs";
+import {RECIPE_TRANSACTION_SOURCE} from "../recipe/RecipeTransaction.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
 
 
@@ -1435,12 +1436,14 @@ class OutputWaiter {
      *
      * Loads the Magic recipe.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      */
     magicClick() {
         const magicButton = document.getElementById("magic");
-        this.app.setRecipeConfig(JSON.parse(magicButton.getAttribute("data-recipe")));
-        window.dispatchEvent(this.manager.statechange);
+        this.app.setRecipeConfig(
+            JSON.parse(magicButton.getAttribute("data-recipe")),
+            RECIPE_TRANSACTION_SOURCE.MAGIC
+        );
         this.hideMagicButton();
     }
 
