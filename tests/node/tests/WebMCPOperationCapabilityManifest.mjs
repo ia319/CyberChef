@@ -84,6 +84,29 @@ TestRegister.addApiTests([
         }
     }),
 
+    it("WebMCPOperationCapabilityManifest: should allow only profiled Golden Operations", () => {
+        const safeOperations = OPERATION_CAPABILITY_MANIFEST.getOperationNames().filter(operationName =>
+            OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName).reviewStatus === REVIEW_STATUS.SAFE
+        );
+
+        assert.deepStrictEqual(safeOperations, [
+            "From Base64",
+            "From Hex",
+            "ROT13",
+            "To Base64",
+            "To Hex",
+            "URL Decode",
+            "URL Encode",
+        ]);
+        for (const operationName of safeOperations) {
+            const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName);
+            assert.equal(capability.mutationPolicy, OPERATION_POLICY.ALLOWED, operationName);
+            assert.equal(capability.agentBakePolicy, OPERATION_POLICY.ALLOWED, operationName);
+            assert(capability.resourceLimits, operationName);
+            for (const field of CAPABILITY_FIELDS) assert.equal(capability[field], false, `${operationName}: ${field}`);
+        }
+    }),
+
     it("WebMCPOperationCapabilityManifest: should default new and prototype-like names to unreviewed", () => {
         const config = Object.create(null);
         Object.assign(config, createConfig(["New Operation", "constructor"]));
@@ -112,6 +135,10 @@ TestRegister.addApiTests([
                 riskCodes: [],
                 evidence: [],
                 reviewedOn: "2026-08-30",
+                sensitiveArguments: null,
+                resourceLimits: null,
+                mutationPolicy: OPERATION_POLICY.BLOCKED,
+                agentBakePolicy: OPERATION_POLICY.BLOCKED,
             };
 
         assert.throws(() => createOperationCapabilityManifest(catalog, [{...policy, operationName: "Missing"}]), RangeError);

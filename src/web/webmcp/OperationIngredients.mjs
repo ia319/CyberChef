@@ -1,4 +1,5 @@
 import { sanitizeCatalogText } from "./CatalogText.mjs";
+import { PROFILE_ARGUMENT_RULE } from "./OperationProfiles.mjs";
 
 const INGREDIENT_DESCRIPTOR_VERSION = "1";
 const INGREDIENT_NAME_MAX_CODE_POINTS = 128;
@@ -199,17 +200,79 @@ function describeIngredient(ingredient, argumentIndex) {
 
 
 /**
+ * Applies an audited argument rule to one conservative Ingredient descriptor.
+ *
+ * @param {Object} mappedIngredient - Base descriptor and option items.
+ * @param {Object} rule - Audited argument rule.
+ * @param {string|number|boolean} defaultValue - Audited default value.
+ * @returns {Object} Profile-backed descriptor and options.
+ */
+function applyIngredientProfile(mappedIngredient, rule, defaultValue) {
+    let valueType,
+        constraints,
+        optionItems = [];
+
+    if (rule.type === PROFILE_ARGUMENT_RULE.BOOLEAN) {
+        valueType = "boolean";
+        constraints = {
+            allowEmpty: false,
+            profileRule: PROFILE_ARGUMENT_RULE.BOOLEAN,
+        };
+    } else if (rule.type === PROFILE_ARGUMENT_RULE.CONSTANT) {
+        valueType = typeof rule.value;
+        constraints = {
+            allowEmpty: false,
+            profileRule: PROFILE_ARGUMENT_RULE.CONSTANT,
+            constant: rule.value,
+        };
+    } else if (rule.type === PROFILE_ARGUMENT_RULE.ENUM) {
+        valueType = "string";
+        constraints = {
+            allowEmpty: false,
+            profileRule: PROFILE_ARGUMENT_RULE.ENUM,
+            exactOption: true,
+        };
+        optionItems = rule.values.map((value, sourceOptionIndex) => Object.freeze({
+            argumentIndex: mappedIngredient.descriptor.argumentIndex,
+            sourceOptionIndex,
+            label: sanitizeCatalogText(value, INGREDIENT_OPTION_TEXT_MAX_CODE_POINTS),
+            valueIncluded: true,
+            value,
+        }));
+    } else {
+        throw new TypeError("Operation profile contains an unknown argument rule");
+    }
+
+    return {
+        descriptor: Object.freeze({
+            ...mappedIngredient.descriptor,
+            valueType,
+            defaultAvailable: true,
+            defaultValue,
+            supportedForPatch: true,
+            unsupportedReason: null,
+            optionCount: optionItems.length,
+            constraints: Object.freeze(constraints),
+        }),
+        optionItems,
+    };
+}
+
+
+/**
  * Describes generated Operation Ingredients and paginates static option labels.
  *
  * @param {Object[]} ingredients - Generated Ingredient configurations.
  * @param {number} [optionOffset=0] - Zero-based offset across all options.
  * @param {number} [optionLimit=20] - Maximum options in this page.
+ * @param {Object|null} [profile=null] - Audited Operation profile.
  * @returns {Object} Versioned Ingredient descriptors and option page.
  */
 function describeOperationIngredients(
     ingredients,
     optionOffset=0,
-    optionLimit=INGREDIENT_OPTION_DEFAULT_LIMIT
+    optionLimit=INGREDIENT_OPTION_DEFAULT_LIMIT,
+    profile=null
 ) {
     if (!Array.isArray(ingredients)) throw new TypeError("Operation Ingredients must be an array");
     if (!Number.isInteger(optionOffset) || optionOffset < 0) {
@@ -218,8 +281,19 @@ function describeOperationIngredients(
     if (!Number.isInteger(optionLimit) || optionLimit < 1 || optionLimit > INGREDIENT_OPTION_MAX_LIMIT) {
         throw new RangeError("Ingredient option limit is outside the supported range");
     }
+    if (profile && (profile.argumentRules.length !== ingredients.length ||
+        profile.defaultArguments.length !== ingredients.length)) {
+        throw new RangeError("Operation profile does not match generated Ingredients");
+    }
 
-    const mapped = ingredients.map(describeIngredient),
+    const mapped = ingredients.map((ingredient, argumentIndex) => {
+            const described = describeIngredient(ingredient, argumentIndex);
+            return profile ? applyIngredientProfile(
+                described,
+                profile.argumentRules[argumentIndex],
+                profile.defaultArguments[argumentIndex]
+            ) : described;
+        }),
         descriptors = Object.freeze(mapped.map(item => item.descriptor)),
         allOptions = mapped.flatMap(item => item.optionItems),
         options = Object.freeze(allOptions.slice(optionOffset, optionOffset + optionLimit).map(option => Object.freeze(option))),

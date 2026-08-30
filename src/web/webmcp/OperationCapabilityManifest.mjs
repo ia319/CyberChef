@@ -1,4 +1,5 @@
 import { OPERATION_CATALOG } from "./OperationCatalog.mjs";
+import { GOLDEN_OPERATION_PROFILES } from "./OperationProfiles.mjs";
 
 const REVIEW_STATUS = Object.freeze({
     SAFE: "safe",
@@ -55,10 +56,35 @@ function deniedPolicy(operationName, capabilities, riskCodes, evidence) {
         riskCodes: Object.freeze([...riskCodes]),
         evidence: Object.freeze([...evidence]),
         reviewedOn: "2026-08-30",
+        sensitiveArguments: null,
+        resourceLimits: null,
+        mutationPolicy: OPERATION_POLICY.BLOCKED,
+        agentBakePolicy: OPERATION_POLICY.BLOCKED,
     });
 }
 
-const REVIEWED_OPERATION_POLICIES = Object.freeze([
+/**
+ * Creates one allowed policy from a fully reviewed Operation profile.
+ *
+ * @param {Object} profile - Reviewed Operation profile.
+ * @returns {Object} Allowed policy record.
+ */
+function allowedPolicy(profile) {
+    return Object.freeze({
+        operationName: profile.operationName,
+        reviewStatus: REVIEW_STATUS.SAFE,
+        capabilities: Object.freeze(Object.fromEntries(CAPABILITY_FIELDS.map(field => [field, false]))),
+        riskCodes: Object.freeze([]),
+        evidence: profile.evidence,
+        reviewedOn: profile.reviewedOn,
+        sensitiveArguments: Object.freeze([]),
+        resourceLimits: profile.resourceLimits,
+        mutationPolicy: OPERATION_POLICY.ALLOWED,
+        agentBakePolicy: OPERATION_POLICY.ALLOWED,
+    });
+}
+
+const DENIED_OPERATION_POLICIES = Object.freeze([
     deniedPolicy("HTTP request", {
         network: true,
         nondeterministic: true,
@@ -116,6 +142,11 @@ const REVIEWED_OPERATION_POLICIES = Object.freeze([
     ]),
 ]);
 
+const REVIEWED_OPERATION_POLICIES = Object.freeze([
+    ...DENIED_OPERATION_POLICIES,
+    ...GOLDEN_OPERATION_PROFILES.map(allowedPolicy),
+]);
+
 
 /**
  * Creates the deny-by-default capability manifest for one static catalog.
@@ -138,6 +169,11 @@ function createOperationCapabilityManifest(
         if (!REVIEW_STATUS_SET.has(policy.reviewStatus) || !policy.capabilities ||
             typeof policy.capabilities !== "object" || Array.isArray(policy.capabilities) ||
             !Array.isArray(policy.riskCodes) || !Array.isArray(policy.evidence) ||
+            !(policy.sensitiveArguments === null || Array.isArray(policy.sensitiveArguments)) ||
+            !(policy.resourceLimits === null || typeof policy.resourceLimits === "object" &&
+                !Array.isArray(policy.resourceLimits)) ||
+            !Object.values(OPERATION_POLICY).includes(policy.mutationPolicy) ||
+            !Object.values(OPERATION_POLICY).includes(policy.agentBakePolicy) ||
             policy.riskCodes.some(code => typeof code !== "string") ||
             policy.evidence.some(item => typeof item !== "string") ||
             typeof policy.reviewedOn !== "string") {
@@ -172,10 +208,11 @@ function createOperationCapabilityManifest(
                 presentType: operation.presentType,
                 manualBake: operation.manualBake,
                 ...capabilities,
-                sensitiveArguments: null,
-                resourceLimits: null,
-                mutationPolicy: OPERATION_POLICY.BLOCKED,
-                agentBakePolicy: OPERATION_POLICY.BLOCKED,
+                sensitiveArguments: reviewed && Array.isArray(reviewed.sensitiveArguments) ?
+                    Object.freeze([...reviewed.sensitiveArguments]) : null,
+                resourceLimits: reviewed?.resourceLimits ? Object.freeze({...reviewed.resourceLimits}) : null,
+                mutationPolicy: reviewed?.mutationPolicy ?? OPERATION_POLICY.BLOCKED,
+                agentBakePolicy: reviewed?.agentBakePolicy ?? OPERATION_POLICY.BLOCKED,
                 riskCodes: Object.freeze([...(reviewed?.riskCodes ?? UNREVIEWED_RISK_CODES)]),
                 evidence: Object.freeze([...(reviewed?.evidence ?? NO_EVIDENCE)]),
                 reviewedOn: reviewed?.reviewedOn ?? null,

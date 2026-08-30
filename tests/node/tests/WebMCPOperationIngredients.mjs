@@ -28,14 +28,15 @@ TestRegister.addApiTests([
             unsupportedReason: null,
             optionCount: 12,
             constraints: {
-                allowEmpty: true,
+                allowEmpty: false,
+                profileRule: "enum",
                 exactOption: true,
             },
         });
         assert.equal(toHex.arguments[1].sourceType, "number");
         assert.equal(toHex.arguments[1].defaultValue, 0);
-        assert.equal(toHex.arguments[1].constraints.integer, false);
-        assert.equal(toHex.arguments[1].constraints.minimum, null);
+        assert.equal(toHex.arguments[1].constraints.profileRule, "constant");
+        assert.equal(toHex.arguments[1].constraints.constant, 0);
         assert.equal(urlDecode.arguments[0].sourceType, "boolean");
         assert.equal(urlDecode.arguments[0].defaultValue, true);
     }),
@@ -59,7 +60,6 @@ TestRegister.addApiTests([
             ["AES Encrypt", 2, UNSUPPORTED_INGREDIENT_REASON.ARGUMENT_SELECTOR],
             ["DateTime Delta", 0, UNSUPPORTED_INGREDIENT_REASON.POPULATES_ARGUMENTS],
             ["Multiple Bombe", 0, UNSUPPORTED_INGREDIENT_REASON.POPULATES_ARGUMENTS],
-            ["From Base64", 0, UNSUPPORTED_INGREDIENT_REASON.EDITABLE_OPTION],
             ["Colossus", 9, UNSUPPORTED_INGREDIENT_REASON.EDITABLE_OPTION],
             ["Colossus", 0, UNSUPPORTED_INGREDIENT_REASON.LABEL],
         ];
@@ -71,15 +71,25 @@ TestRegister.addApiTests([
         }
     }),
 
-    it("WebMCPOperationIngredients: should omit editable values until a profile allows them", () => {
+    it("WebMCPOperationIngredients: should expose only profiled editable values", () => {
         const base64 = OPERATION_CATALOG.getOperationIngredients("From Base64", 0, 3);
 
-        assert.equal(base64.arguments[0].optionCount, 17);
-        assert.equal(base64.arguments[0].defaultAvailable, false);
-        assert.equal(base64.arguments[0].defaultValue, null);
-        assert.equal(base64.options[0].valueIncluded, false);
-        assert.equal(base64.options[0].value, null);
-        assert.equal(base64.options[0].label.startsWith("Standard"), true);
+        assert.equal(base64.arguments[0].optionCount, 2);
+        assert.equal(base64.arguments[0].supportedForPatch, true);
+        assert.equal(base64.arguments[0].defaultAvailable, true);
+        assert.equal(base64.arguments[0].defaultValue, "A-Za-z0-9+/=");
+        assert.deepStrictEqual(base64.options.map(option => option.value), [
+            "A-Za-z0-9+/=",
+            "A-Za-z0-9-_",
+        ]);
+
+        const unprofiled = describeOperationIngredients([{
+            name: "Editable",
+            type: "editableOption",
+            value: [{name: "Choice", value: "custom"}],
+        }]);
+        assert.equal(unprofiled.arguments[0].supportedForPatch, false);
+        assert.equal(unprofiled.options[0].valueIncluded, false);
     }),
 
     it("WebMCPOperationIngredients: should bound static text and large defaults", () => {

@@ -5,6 +5,7 @@ import {
     sanitizeOperationDescription,
 } from "./CatalogText.mjs";
 import { describeOperationIngredients } from "./OperationIngredients.mjs";
+import { getOperationProfile } from "./OperationProfiles.mjs";
 
 const OPERATION_SEARCH_DEFAULT_LIMIT = 5;
 const OPERATION_SEARCH_MAX_LIMIT = 10;
@@ -69,7 +70,12 @@ function createOperationCatalog(config=OperationConfig) {
     function getOperationIngredients(name, optionOffset, optionLimit) {
         const ingredients = ingredientsByName.get(name);
         if (!ingredients) return null;
-        return describeOperationIngredients(ingredients, optionOffset, optionLimit);
+        return describeOperationIngredients(
+            ingredients,
+            optionOffset,
+            optionLimit,
+            getOperationProfile(name)
+        );
     }
 
     /**
