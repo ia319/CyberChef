@@ -186,9 +186,10 @@ class RecipeTransaction {
      * @param {string} actor - Trusted transaction actor.
      * @param {string} source - Trusted transaction source.
      * @param {Object[]} [insertedSteps=[]] - Inserted command identities.
+     * @param {Object[]} [actions=[]] - Bounded Recipe actions without argument values.
      * @returns {Object} Immutable transaction result.
      */
-    #commitPreparedModel(preparedModel, snapshot, actor, source, insertedSteps=[]) {
+    #commitPreparedModel(preparedModel, snapshot, actor, source, insertedSteps=[], actions=[]) {
         this.#model.commitPreparedProjection(preparedModel);
         if (!preparedModel.changed) {
             return Object.freeze({
@@ -205,6 +206,7 @@ class RecipeTransaction {
                 source,
                 beforeRevision: snapshot.recipeRevision,
                 afterRevision,
+                actions: Object.freeze([...actions]),
             });
         return Object.freeze({
             status: RECIPE_TRANSACTION_STATUS.COMMITTED,
@@ -223,11 +225,19 @@ class RecipeTransaction {
      * @param {string} actor - Trusted transaction actor.
      * @param {string} source - Trusted transaction source.
      * @param {Object[]} [insertedSteps=[]] - Inserted command identities.
+     * @param {Object[]} [actions=[]] - Bounded Recipe actions without argument values.
      * @returns {Object} Immutable transaction result.
      */
-    #publishPreparedModel(preparedModel, snapshot, actor, source, insertedSteps=[]) {
+    #publishPreparedModel(preparedModel, snapshot, actor, source, insertedSteps=[], actions=[]) {
         if (!preparedModel.changed) {
-            return this.#commitPreparedModel(preparedModel, snapshot, actor, source, insertedSteps);
+            return this.#commitPreparedModel(
+                preparedModel,
+                snapshot,
+                actor,
+                source,
+                insertedSteps,
+                actions
+            );
         }
 
         let preparedProjection;
@@ -258,7 +268,8 @@ class RecipeTransaction {
                 snapshot,
                 actor,
                 source,
-                insertedSteps
+                insertedSteps,
+                actions
             );
         } catch (err) {
             let rollbackFailed = false;
@@ -463,7 +474,8 @@ class RecipeTransaction {
             snapshot,
             RECIPE_TRANSACTION_ACTOR.AGENT,
             RECIPE_TRANSACTION_SOURCE.WEBMCP,
-            patch.insertedSteps
+            patch.insertedSteps,
+            patch.actions
         );
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
             this.#nextStepNumber = draftStepNumber;

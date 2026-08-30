@@ -103,6 +103,29 @@ TestRegister.addApiTests([
         assert.equal(result.change.source, "webmcp");
         assert.equal(result.change.beforeRevision, 1);
         assert.equal(result.change.afterRevision, 2);
+        assert.deepStrictEqual(result.change.actions, [
+            {
+                commandIndex: 0,
+                type: "setArgument",
+                operationName: "To Base64",
+                stepId: stepIds[0],
+            },
+            {
+                commandIndex: 1,
+                type: "move",
+                operationName: "From Hex",
+                stepId: stepIds[1],
+            },
+            {
+                commandIndex: 2,
+                type: "insert",
+                operationName: "To Hex",
+                stepId: "transaction-step-1",
+            },
+        ]);
+        assert.equal(Object.isFrozen(result.change.actions), true);
+        assert.equal(Object.isFrozen(result.change.actions[0]), true);
+        assert.equal(JSON.stringify(result.change).includes("A-Za-z0-9-_"), false);
         assert.deepStrictEqual(result.insertedSteps, [{commandIndex: 2, stepId: "transaction-step-1"}]);
         assert.deepStrictEqual(model.exportConfig(), [
             operation("From Hex", ["Auto"]),
@@ -232,6 +255,7 @@ TestRegister.addApiTests([
         assert.equal(result.change.source, "disable");
         assert.equal(result.change.beforeRevision, 1);
         assert.equal(result.change.afterRevision, 2);
+        assert.deepStrictEqual(result.change.actions, []);
         assert.deepStrictEqual(model.exportConfig(), [operation("Register", ["R0", "{0}"])]);
         assert.equal(adapter.getState().prepareCount, 0);
         assert.throws(() => transaction.commitUserProjection(userProjection, "webmcp"), TypeError);

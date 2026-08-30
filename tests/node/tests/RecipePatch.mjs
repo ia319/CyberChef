@@ -67,13 +67,13 @@ TestRegister.addApiTests([
         ]);
         assert.deepStrictEqual(result.insertedSteps, [{commandIndex: 6, stepId: "draft-step-1"}]);
         assert.deepStrictEqual(result.actions, [
-            {commandIndex: 0, type: "setArgument", operationName: "To Base64"},
-            {commandIndex: 1, type: "disable", operationName: "To Base64"},
-            {commandIndex: 2, type: "enable", operationName: "To Base64"},
-            {commandIndex: 3, type: "setBreakpoint", operationName: "From Hex"},
-            {commandIndex: 4, type: "move", operationName: "From Hex"},
-            {commandIndex: 5, type: "remove", operationName: "To Base64"},
-            {commandIndex: 6, type: "insert", operationName: "To Hex"},
+            {commandIndex: 0, type: "setArgument", operationName: "To Base64", stepId: "duplicate-b"},
+            {commandIndex: 1, type: "disable", operationName: "To Base64", stepId: "duplicate-a"},
+            {commandIndex: 2, type: "enable", operationName: "To Base64", stepId: "duplicate-a"},
+            {commandIndex: 3, type: "setBreakpoint", operationName: "From Hex", stepId: "hex"},
+            {commandIndex: 4, type: "move", operationName: "From Hex", stepId: "hex"},
+            {commandIndex: 5, type: "remove", operationName: "To Base64", stepId: "duplicate-a"},
+            {commandIndex: 6, type: "insert", operationName: "To Hex", stepId: "draft-step-1"},
         ]);
         assert.deepStrictEqual(initial.steps, [
             step("duplicate-a", operation("To Base64", ["A-Za-z0-9+/="])),
