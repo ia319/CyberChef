@@ -17,7 +17,13 @@ import it from "../assertionHandler.mjs";
 
 const VALID_INPUTS = Object.freeze({
     [TOOL_NAME.SEARCH_OPERATIONS]: {query: "base64", limit: 5, offset: 0},
-    [TOOL_NAME.GET_OPERATION_DETAILS]: {name: "To Base64"},
+    [TOOL_NAME.GET_OPERATION_DETAILS]: {
+        name: "To Base64",
+        argumentOffset: 0,
+        argumentLimit: 3,
+        optionOffset: 0,
+        optionLimit: 20,
+    },
     [TOOL_NAME.GET_RECIPE_STATE]: {},
     [TOOL_NAME.APPLY_RECIPE_PATCH]: {
         expectedRevision: 2,

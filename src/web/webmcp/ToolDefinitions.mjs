@@ -173,6 +173,18 @@ const SEARCH_OPERATIONS_SCHEMA = closedObject({
 
 const GET_OPERATION_DETAILS_SCHEMA = closedObject({
     name: OPERATION_NAME_SCHEMA,
+    argumentOffset: {
+        type: "integer",
+        minimum: 0,
+        maximum: 10000,
+        description: "Zero-based offset into the Operation argument list.",
+    },
+    argumentLimit: {
+        type: "integer",
+        minimum: 1,
+        maximum: 10,
+        description: "Maximum number of Operation arguments to return.",
+    },
     optionOffset: {
         type: "integer",
         minimum: 0,

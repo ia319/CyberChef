@@ -6,6 +6,7 @@ import {
     TOOL_RESULT_MAX_CHARS,
     createErrorResult,
     createSuccessResult,
+    isSuccessResultWithinBudget,
 } from "../../../src/web/webmcp/ToolResult.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
@@ -97,6 +98,12 @@ TestRegister.addApiTests([
         assert.equal(result.error.code, TOOL_ERROR_CODE.RESULT_TOO_LARGE);
         assert(serialized.length <= TOOL_RESULT_MAX_CHARS);
         assert.equal(serialized.includes("SSSSSSSS"), false);
+    }),
+
+    it("WebMCPToolResult: should measure the complete success envelope against its budget", () => {
+        assert.equal(isSuccessResultWithinBudget({value: "small"}), true);
+        assert.equal(isSuccessResultWithinBudget({value: "S".repeat(TOOL_RESULT_MAX_CHARS)}), false);
+        assert.equal(isSuccessResultWithinBudget({value: undefined}), false);
     }),
 
     it("WebMCPToolResult: should keep every fixed error within its message budget", () => {

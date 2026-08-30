@@ -10,6 +10,7 @@ const TOOL_ERROR_CODE = Object.freeze({
     COLLABORATION_DISABLED: "COLLABORATION_DISABLED",
     SESSION_ENDED: "SESSION_ENDED",
     INVALID_REQUEST: "INVALID_REQUEST",
+    UNKNOWN_OPERATION: "UNKNOWN_OPERATION",
     INVALID_PATCH: "INVALID_PATCH",
     STALE_RECIPE: "STALE_RECIPE",
     UNKNOWN_STEP: "UNKNOWN_STEP",
@@ -49,6 +50,7 @@ const ERROR_DEFINITIONS = Object.freeze({
     [TOOL_ERROR_CODE.COLLABORATION_DISABLED]: defineError("Start Recipe collaboration before using this tool.", true, true),
     [TOOL_ERROR_CODE.SESSION_ENDED]: defineError("The Recipe collaboration session ended.", true, true),
     [TOOL_ERROR_CODE.INVALID_REQUEST]: defineError("The tool request is invalid.", true, false),
+    [TOOL_ERROR_CODE.UNKNOWN_OPERATION]: defineError("The requested Operation does not exist in this CyberChef catalog.", true, false),
     [TOOL_ERROR_CODE.INVALID_PATCH]: defineError("The Recipe patch is invalid.", true, false),
     [TOOL_ERROR_CODE.STALE_RECIPE]: defineError("The Recipe changed. Read its current state before applying another patch.", true, false),
     [TOOL_ERROR_CODE.UNKNOWN_STEP]: defineError("The requested Recipe step does not exist in the current revision.", true, false),
@@ -141,6 +143,30 @@ function createSuccessResult(data, state) {
 
 
 /**
+ * Checks whether trusted handler data fits the shared success envelope.
+ *
+ * @param {Object} data - Tool-specific result data.
+ * @param {Object} [state] - Optional version and provenance state.
+ * @returns {boolean} Whether the final success result remains within all result limits.
+ */
+function isSuccessResultWithinBudget(data, state) {
+    const result = {
+        version: TOOL_RESULT_VERSION,
+        ok: true,
+        data,
+    };
+    if (typeof state !== "undefined") result.state = state;
+
+    try {
+        const copy = copyJsonValue(result, TOOL_RESULT_MAX_DEPTH, TOOL_RESULT_MAX_NODES);
+        return copy.serialized.length <= TOOL_RESULT_MAX_CHARS;
+    } catch (err) {
+        return false;
+    }
+}
+
+
+/**
  * Creates an error result from the fixed error catalog.
  *
  * @param {string} code - Error code from TOOL_ERROR_CODE.
@@ -158,4 +184,5 @@ export {
     TOOL_RESULT_VERSION,
     createErrorResult,
     createSuccessResult,
+    isSuccessResultWithinBudget,
 };
