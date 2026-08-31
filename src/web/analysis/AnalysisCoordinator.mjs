@@ -161,30 +161,29 @@ class AnalysisCoordinator {
     ensure(target, request) {
         this.#validateRequest(request);
         const analysisTarget = createAnalysisTarget(target),
-            cached = this.#findCached(analysisTarget);
-        if (cached) {
+            selection = this.#selectDecision(analysisTarget);
+        if (selection.decision === ANALYSIS_DECISION.CACHED) {
             return Object.freeze({
                 decision: ANALYSIS_DECISION.CACHED,
-                analysis: this.#snapshot(cached),
-                completion: Promise.resolve(this.#completion(cached)),
+                analysis: this.#snapshot(selection.analysis),
+                completion: Promise.resolve(this.#completion(selection.analysis)),
             });
         }
-
-        const active = this.#activeAnalyses(),
-            matching = active.find(analysis =>
-                analysisTargetMatches(analysis.target, analysisTarget)
-            );
-        if (matching) {
+        if (selection.decision === ANALYSIS_DECISION.JOINED) {
             return Object.freeze({
                 decision: ANALYSIS_DECISION.JOINED,
-                analysis: this.#snapshot(matching),
-                completion: this.#addWaiter(matching, request.owner, request.signal),
+                analysis: this.#snapshot(selection.analysis),
+                completion: this.#addWaiter(
+                    selection.analysis,
+                    request.owner,
+                    request.signal
+                ),
             });
         }
-        if (active.length > 0) {
+        if (selection.decision === ANALYSIS_DECISION.BUSY) {
             return Object.freeze({
                 decision: ANALYSIS_DECISION.BUSY,
-                analysis: this.#snapshot(active[0]),
+                analysis: this.#snapshot(selection.analysis),
                 completion: null,
             });
         }
@@ -194,6 +193,20 @@ class AnalysisCoordinator {
             decision: ANALYSIS_DECISION.STARTED,
             analysis: this.#snapshot(analysis),
             completion: this.#addWaiter(analysis, request.owner, request.signal),
+        });
+    }
+
+    /**
+     * Reports the current cache and ownership decision without creating an analysis.
+     *
+     * @param {Object} target - Completed Output provenance.
+     * @returns {Object} Scheduling decision and optional existing analysis snapshot.
+     */
+    getDecision(target) {
+        const selection = this.#selectDecision(createAnalysisTarget(target));
+        return Object.freeze({
+            decision: selection.decision,
+            analysis: selection.analysis ? this.#snapshot(selection.analysis) : null,
         });
     }
 
@@ -257,6 +270,23 @@ class AnalysisCoordinator {
         return [...this.#analyses.values()].filter(analysis =>
             !TERMINAL_STATES.has(analysis.state)
         );
+    }
+
+    /**
+     * Selects cache reuse, active ownership or a new lifecycle without mutating state.
+     *
+     * @param {Object} target - Immutable completed Output target.
+     * @returns {Object} Decision and matching internal analysis when one exists.
+     */
+    #selectDecision(target) {
+        const cached = this.#findCached(target);
+        if (cached) return {decision: ANALYSIS_DECISION.CACHED, analysis: cached};
+
+        const active = this.#activeAnalyses(),
+            matching = active.find(analysis => analysisTargetMatches(analysis.target, target));
+        if (matching) return {decision: ANALYSIS_DECISION.JOINED, analysis: matching};
+        if (active.length) return {decision: ANALYSIS_DECISION.BUSY, analysis: active[0]};
+        return {decision: ANALYSIS_DECISION.STARTED, analysis: null};
     }
 
     /**

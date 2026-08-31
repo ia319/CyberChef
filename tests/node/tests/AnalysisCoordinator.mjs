@@ -81,12 +81,23 @@ TestRegister.addApiTests([
 
     it("AnalysisCoordinator: should join matching work and reject a different active target", async () => {
         const coordinator = new AnalysisCoordinator(),
+            initialDecision = coordinator.getDecision(createTarget()),
             started = coordinator.ensure(createTarget(), {owner: ANALYSIS_OWNER.UI}),
+            joinedDecision = coordinator.getDecision(createTarget()),
             joined = coordinator.ensure(createTarget(), {owner: ANALYSIS_OWNER.AGENT}),
+            busyDecision = coordinator.getDecision(createTarget({outputVersion: 6})),
             busy = coordinator.ensure(createTarget({outputVersion: 6}), {
                 owner: ANALYSIS_OWNER.AGENT,
             });
 
+        assert.deepStrictEqual(initialDecision, {
+            decision: ANALYSIS_DECISION.STARTED,
+            analysis: null,
+        });
+        assert.equal(joinedDecision.decision, ANALYSIS_DECISION.JOINED);
+        assert.equal(joinedDecision.analysis.analysisId, started.analysis.analysisId);
+        assert.equal(busyDecision.decision, ANALYSIS_DECISION.BUSY);
+        assert.equal(busyDecision.analysis.analysisId, started.analysis.analysisId);
         assert.equal(started.decision, ANALYSIS_DECISION.STARTED);
         assert.equal(joined.decision, ANALYSIS_DECISION.JOINED);
         assert.equal(joined.analysis.analysisId, started.analysis.analysisId);
@@ -120,6 +131,9 @@ TestRegister.addApiTests([
             await started.completion;
 
             const cached = coordinator.ensure(createTarget(), {owner: ANALYSIS_OWNER.AGENT});
+            const cachedDecision = coordinator.getDecision(createTarget());
+            assert.equal(cachedDecision.decision, ANALYSIS_DECISION.CACHED);
+            assert.equal(cachedDecision.analysis.analysisId, started.analysis.analysisId);
             assert.equal(cached.decision, ANALYSIS_DECISION.CACHED);
             assert.equal(cached.analysis.analysisId, started.analysis.analysisId);
             assert.strictEqual((await cached.completion).value, value);
