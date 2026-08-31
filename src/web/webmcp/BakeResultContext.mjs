@@ -9,13 +9,21 @@ const BAKE_ERROR_CODES = new Set([
     "BAKE_TIMEOUT",
     "STALE_BAKE_RESULT",
 ]);
-const BAKE_TERMINAL_STATES = new Set([
+const BAKE_RESULT_TERMINAL_STATES = new Set([
     "cancelled",
+    "completed",
     "failed",
     "paused",
     "superseded",
     "timedOut",
 ]);
+const ERROR_TERMINAL_STATE = Object.freeze({
+    BAKE_PAUSED: "paused",
+    BAKE_FAILED: "failed",
+    BAKE_CANCELLED: "cancelled",
+    BAKE_TIMEOUT: "timedOut",
+    STALE_BAKE_RESULT: "superseded",
+});
 const BAKE_STATE_FIELDS = Object.freeze([
     "sessionEpoch",
     "recipeRevision",
@@ -74,7 +82,7 @@ function isBakeErrorState(state) {
         Number.isSafeInteger(state.outputGeneration) && state.outputGeneration >= 1 &&
         Number.isSafeInteger(state.outputVersion) && state.outputVersion >= 1 &&
         Number.isSafeInteger(state.bakeId) && state.bakeId >= 1 &&
-        BAKE_TERMINAL_STATES.has(state.terminalState);
+        BAKE_RESULT_TERMINAL_STATES.has(state.terminalState);
 }
 
 
@@ -90,13 +98,58 @@ function isBakeErrorContext(code, context) {
         !Array.isArray(context) &&
         Object.keys(context).every(key => key === "stepId" || key === "state") &&
         isBakeErrorState(context.state) &&
+        context.state.terminalState === ERROR_TERMINAL_STATE[code] &&
         (context.stepId === null || typeof context.stepId === "string" &&
             context.stepId.length > 0 && context.stepId.length <= RECIPE_STEP_ID_MAX_CHARS &&
             RECIPE_STEP_ID_PATTERN.test(context.stepId));
 }
 
+
+/**
+ * Projects one settled Run and Output provenance through the Gate B state allowlist.
+ *
+ * @param {number|string} sessionEpoch - Active collaboration session identity.
+ * @param {Object} result - Trusted Agent Bake service result.
+ * @returns {Object} Content-free Bake result state.
+ * @throws {TypeError} When Run and Output identities do not match.
+ */
+function createBakeResultState(sessionEpoch, result) {
+    const target = result?.target,
+        provenance = result?.provenance,
+        inputTarget = target?.inputTargets?.length === 1 ? target.inputTargets[0] : null,
+        state = {
+            sessionEpoch,
+            recipeRevision: target?.recipeRevisionAtStart,
+            executionCapability: AGENT_BAKE_CAPABILITY,
+            inputTabId: inputTarget?.inputTabId,
+            inputGeneration: inputTarget?.inputGeneration,
+            inputRevision: inputTarget?.inputRevision,
+            executionOptionsVersion: target?.executionOptionsVersion,
+            viewVersion: target?.viewVersion,
+            outputTabId: inputTarget?.outputTabId,
+            outputGeneration: inputTarget?.outputGeneration,
+            outputVersion: provenance?.outputVersion,
+            bakeId: target?.bakeId,
+            terminalState: result?.terminalState,
+        };
+
+    if (!isBakeErrorState(state) || provenance?.bakeId !== state.bakeId ||
+        provenance.recipeRevision !== state.recipeRevision ||
+        provenance.inputTabId !== state.inputTabId ||
+        provenance.inputGeneration !== state.inputGeneration ||
+        provenance.inputRevision !== state.inputRevision ||
+        provenance.outputTabId !== state.outputTabId ||
+        provenance.outputGeneration !== state.outputGeneration ||
+        provenance.executionOptionsVersion !== state.executionOptionsVersion ||
+        provenance.terminalState !== state.terminalState) {
+        throw new TypeError("Agent Bake result provenance is invalid");
+    }
+    return state;
+}
+
 export {
     AGENT_BAKE_CAPABILITY,
     BAKE_STATE_FIELDS,
+    createBakeResultState,
     isBakeErrorContext,
 };
