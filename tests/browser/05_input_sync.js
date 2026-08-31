@@ -125,11 +125,14 @@ module.exports = {
         browser.executeAsync(async done => {
             try {
                 const input = window.app.manager.input,
-                    before = await input.getInputState(1);
+                    output = window.app.manager.output,
+                    before = await input.getInputState(1),
+                    outputBefore = output.getOutputState(1);
 
                 input.clearAllIoClick();
-                const after = await input.getInputState(1);
-                done({before, after});
+                const after = await input.getInputState(1),
+                    outputAfter = output.getOutputState(1);
+                done({before, after, outputBefore, outputAfter});
             } catch (err) {
                 done({scriptError: {name: err.name, message: err.message}});
             }
@@ -141,6 +144,72 @@ module.exports = {
                 value.after.inputGeneration
             );
             browser.assert.strictEqual(value.after.inputRevision, 0);
+            browser.assert.notStrictEqual(
+                value.outputBefore.outputGeneration,
+                value.outputAfter.outputGeneration
+            );
+        });
+    },
+
+    "Active tab selection advances the view version": browser => {
+        browser.executeAsync(async done => {
+            try {
+                const app = window.app,
+                    manager = app.manager,
+                    firstInput = await manager.input.getInputState(1),
+                    firstOutput = manager.output.getOutputState(1),
+                    initialView = manager.tabs.getViewState(),
+                    target = manager.runTargets.capture({
+                        source: "manual",
+                        recipeRevisionAtStart: manager.recipe.getRecipeRevision(),
+                        inputStates: [firstInput],
+                        outputStates: [firstOutput],
+                        ...initialView,
+                        executionOptions: app.options,
+                        progress: 0,
+                        step: false,
+                    });
+
+                manager.input.addInput(false);
+                await manager.input.getInputState(2);
+                const afterInactiveAdd = manager.tabs.getViewState();
+
+                manager.input.changeTab(2, false);
+                const inputChanged = manager.tabs.getViewState(),
+                    targetCurrentAfterInputChange = manager.runTargets.viewIsCurrent(
+                        target,
+                        inputChanged
+                    );
+
+                manager.output.changeTab(2, false);
+                const outputChanged = manager.tabs.getViewState();
+                done({
+                    initialView,
+                    afterInactiveAdd,
+                    inputChanged,
+                    outputChanged,
+                    targetCurrentAfterInputChange,
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(
+                value.afterInactiveAdd.viewVersion,
+                value.initialView.viewVersion
+            );
+            browser.assert.strictEqual(
+                value.inputChanged.viewVersion,
+                value.initialView.viewVersion + 1
+            );
+            browser.assert.strictEqual(value.inputChanged.tabsSynchronized, false);
+            browser.assert.strictEqual(value.targetCurrentAfterInputChange, false);
+            browser.assert.strictEqual(
+                value.outputChanged.viewVersion,
+                value.initialView.viewVersion + 2
+            );
+            browser.assert.strictEqual(value.outputChanged.tabsSynchronized, true);
         });
     },
 

@@ -1592,7 +1592,7 @@ class InputWaiter {
             numTabs = tabsWrapper.children.length;
 
         if (!this.manager.tabs.getTabItem(inputNum, "input") && numTabs < this.maxTabs) {
-            const newTab = this.manager.tabs.createTabElement(inputNum, changeTab, "input");
+            const newTab = this.manager.tabs.createTabElement(inputNum, false, "input");
             tabsWrapper.appendChild(newTab);
 
             if (numTabs > 0) {

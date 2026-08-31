@@ -18,6 +18,7 @@ class TabWaiter {
     constructor(app, manager) {
         this.app = app;
         this.manager = manager;
+        this.viewVersion = 0;
     }
 
     /**
@@ -46,6 +47,22 @@ class TabWaiter {
             return parseInt(tabNum, 10);
         }
         return -1;
+    }
+
+    /**
+     * Returns the active Input and Output selection without reading their content.
+     *
+     * @returns {Object} Immutable active view state.
+     */
+    getViewState() {
+        const activeInputTabId = this.getActiveTab("input"),
+            activeOutputTabId = this.getActiveTab("output");
+        return Object.freeze({
+            activeInputTabId,
+            activeOutputTabId,
+            tabsSynchronized: activeInputTabId === activeOutputTabId && activeInputTabId > 0,
+            viewVersion: this.viewVersion,
+        });
     }
 
     /**
@@ -149,7 +166,8 @@ class TabWaiter {
      * @param {string} io - Either "input" or "output"
      */
     refreshTabs(nums, activeTab, tabsLeft, tabsRight, io) {
-        const tabsList = document.getElementById(`${io}-tabs`);
+        const tabsList = document.getElementById(`${io}-tabs`),
+            previousActiveTab = this.getActiveTab(io);
 
         // Remove existing tab elements
         for (let i = tabsList.children.length - 1; i >= 0; i--) {
@@ -180,6 +198,7 @@ class TabWaiter {
         } else {
             this.hideTabBar();
         }
+        this.recordActiveTabChange(previousActiveTab, this.getActiveTab(io));
     }
 
     /**
@@ -190,7 +209,8 @@ class TabWaiter {
      * @return {boolean} - False if the tab is not currently being displayed
      */
     changeTab(inputNum, io) {
-        const tabsList = document.getElementById(`${io}-tabs`);
+        const tabsList = document.getElementById(`${io}-tabs`),
+            previousActiveTab = this.getActiveTab(io);
 
         let found = false;
         for (let i = 0; i < tabsList.children.length; i++) {
@@ -203,7 +223,23 @@ class TabWaiter {
             }
         }
 
+        if (found) this.recordActiveTabChange(previousActiveTab, this.getActiveTab(io));
         return found;
+    }
+
+    /**
+     * Advances the view version when an active tab selection changes.
+     *
+     * @param {number} previousActiveTab - Previous active tab.
+     * @param {number} activeTab - Current active tab.
+     * @returns {void}
+     */
+    recordActiveTabChange(previousActiveTab, activeTab) {
+        if (previousActiveTab === activeTab) return;
+        if (this.viewVersion === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("View version limit reached");
+        }
+        this.viewVersion++;
     }
 
     /**

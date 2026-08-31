@@ -24,6 +24,7 @@ import {ACTIVE_BUILD_PROFILE} from "./webmcp/BuildProfiles.mjs";
 import {AGENT_RECIPE_PATCH_POLICY} from "./webmcp/AgentRecipePatchPolicy.mjs";
 import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
 import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
+import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
 
 
 /**
@@ -76,6 +77,7 @@ class Manager {
         this.input       = new InputWaiter(this.app, this);
         this.output      = new OutputWaiter(this.app, this);
         this.options     = new OptionsWaiter(this.app, this);
+        this.runTargets  = new RunTargetBuilder();
         this.highlighter = new HighlighterWaiter(this.app, this);
         this.seasonal    = new SeasonalWaiter(this.app, this);
         this.bindings    = new BindingsWaiter(this.app, this);

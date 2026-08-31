@@ -30,6 +30,7 @@ import "./tests/lib/BigIntUtils.mjs";
 import "./tests/lib/ChartsProtocolPrototypePollution.mjs";
 import "./tests/OperationConfigTypes.mjs";
 import "./tests/InputSyncController.mjs";
+import "./tests/RunTargetBuilder.mjs";
 import "./tests/RecipeModel.mjs";
 import "./tests/RecipePatch.mjs";
 import "./tests/RecipeTransaction.mjs";

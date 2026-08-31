@@ -71,6 +71,7 @@ class OutputWaiter {
         this.initEditor();
 
         this.outputs = {};
+        this.nextOutputGeneration = 1;
         this.zipWorker = null;
         this.maxTabs = this.manager.tabs.calcMaxTabs();
         this.tabTimeout = null;
@@ -536,6 +537,33 @@ class OutputWaiter {
     }
 
     /**
+     * Returns a content-free Output identity.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @returns {Object|null} Immutable Output identity or null.
+     */
+    getOutputState(inputNum) {
+        const output = this.outputs[inputNum];
+        if (!output) return null;
+        return Object.freeze({
+            outputTabId: output.inputNum,
+            outputGeneration: output.outputGeneration,
+        });
+    }
+
+    /**
+     * Allocates a non-reused Output generation for this page lifecycle.
+     *
+     * @returns {number} Output generation.
+     */
+    createOutputGeneration() {
+        if (this.nextOutputGeneration === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("Output generation limit reached");
+        }
+        return this.nextOutputGeneration++;
+    }
+
+    /**
      * Adds a new output to the output array.
      * Creates a new tab if we have less than maxtabs tabs open
      *
@@ -549,6 +577,7 @@ class OutputWaiter {
         const newOutput = {
             data: null,
             inputNum: inputNum,
+            outputGeneration: this.createOutputGeneration(),
             statusMessage: `Input ${inputNum} has not been baked yet.`,
             error: null,
             status: "inactive",
@@ -1105,7 +1134,7 @@ class OutputWaiter {
 
         if (!this.manager.tabs.getTabItem(inputNum, "output") && numTabs < this.maxTabs) {
             // Create a new tab element
-            const newTab = this.manager.tabs.createTabElement(inputNum, changeTab, "output");
+            const newTab = this.manager.tabs.createTabElement(inputNum, false, "output");
             tabsWrapper.appendChild(newTab);
         } else if (numTabs === this.maxTabs) {
             // Can't create a new tab
