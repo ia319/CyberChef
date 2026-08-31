@@ -509,6 +509,47 @@ module.exports = {
         });
     },
 
+    "Queued Input flush retries after an earlier failure": browser => {
+        browser.executeAsync(async done => {
+            const input = window.app.manager.input,
+                originalFlushPendingInputChanges = input.flushPendingInputChanges;
+            let callCount = 0,
+                rejectFirst;
+            try {
+                input.flushPendingInputChanges = function(inputNum) {
+                    callCount++;
+                    if (callCount === 1) {
+                        return new Promise((resolve, reject) => {
+                            rejectFirst = reject;
+                        });
+                    }
+                    return originalFlushPendingInputChanges.call(this, inputNum);
+                };
+
+                const first = input.flushActiveInput().then(
+                        () => ({state: "resolved"}),
+                        err => ({state: "rejected", message: err.message})
+                    ),
+                    queued = input.flushActiveInput();
+                rejectFirst(new Error("Controlled earlier flush failure"));
+                const [firstOutcome, queuedState] = await Promise.all([first, queued]);
+                done({firstOutcome, queuedState, callCount});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}, callCount});
+            } finally {
+                input.flushPendingInputChanges = originalFlushPendingInputChanges;
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.deepStrictEqual(value.firstOutcome, {
+                state: "rejected",
+                message: "Controlled earlier flush failure",
+            });
+            browser.assert.strictEqual(value.queuedState.inputNum, 1);
+            browser.assert.strictEqual(value.callCount, 2);
+        });
+    },
+
     after: browser => {
         browser.end();
     },

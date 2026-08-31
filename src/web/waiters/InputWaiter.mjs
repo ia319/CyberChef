@@ -1070,7 +1070,8 @@ class InputWaiter {
         const inputNum = this.manager.tabs.getActiveTab("input");
 
         if (this.inputFlush) {
-            await this.inputFlush.completion;
+            // The queued caller still owns a fresh synchronization attempt.
+            await this.inputFlush.completion.catch(() => {});
             return await this.flushActiveInput();
         }
 
