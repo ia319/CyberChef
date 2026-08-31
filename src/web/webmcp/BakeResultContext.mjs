@@ -1,8 +1,10 @@
 const AGENT_BAKE_CAPABILITY = "AGENT_BAKE_AVAILABLE";
 const USER_BAKE_REQUIRED = "USER_BAKE_REQUIRED";
 const RECIPE_STEP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const SESSION_EPOCH_PATTERN = /^[A-Za-z0-9_-]+$/;
 const INPUT_GENERATION_PATTERN = /^\d+:\d+$/;
 const RECIPE_STEP_ID_MAX_CHARS = 64;
+const SESSION_EPOCH_MAX_CHARS = 64;
 const BAKE_ERROR_CODES = new Set([
     "BAKE_PAUSED",
     "BAKE_FAILED",
@@ -69,8 +71,8 @@ function isBakeErrorState(state) {
 
     return (isNonNegativeIdentity(state.sessionEpoch) ||
             typeof state.sessionEpoch === "string" && state.sessionEpoch.length > 0 &&
-                state.sessionEpoch.length <= RECIPE_STEP_ID_MAX_CHARS &&
-                RECIPE_STEP_ID_PATTERN.test(state.sessionEpoch)) &&
+                state.sessionEpoch.length <= SESSION_EPOCH_MAX_CHARS &&
+                SESSION_EPOCH_PATTERN.test(state.sessionEpoch)) &&
         isNonNegativeIdentity(state.recipeRevision) &&
         state.executionCapability === AGENT_BAKE_CAPABILITY &&
         Number.isSafeInteger(state.inputTabId) && state.inputTabId >= 1 &&
