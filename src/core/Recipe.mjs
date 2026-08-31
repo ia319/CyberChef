@@ -10,16 +10,10 @@ import Operation from "./Operation.mjs";
 import DishError from "./errors/DishError.mjs";
 import log from "loglevel";
 import { isWorkerEnvironment } from "./Utils.mjs";
+import {RECIPE_EXECUTION_STATE} from "./ExecutionState.mjs";
 
 // Cache container for modules
 let modules = null;
-
-const RECIPE_EXECUTION_STATE = Object.freeze({
-    COMPLETED: "completed",
-    EXPECTED_FAILURE: "expectedFailure",
-    FATAL_FAILURE: "fatalFailure",
-    PAUSED: "paused",
-});
 
 /**
  * The Recipe controls a list of Operations and the Dish they operate on.

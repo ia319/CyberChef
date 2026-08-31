@@ -408,7 +408,14 @@ module.exports = {
 
             const inputNum = app.manager.tabs.getActiveTab("output"),
                 workerIndex = worker.getInactiveChefWorker(true),
-                output = app.manager.output.outputs[inputNum];
+                output = app.manager.output.outputs[inputNum],
+                target = worker.captureWorkspaceTarget({
+                    nums: [inputNum],
+                    inputStates: [app.manager.input.getSynchronizedInputState(inputNum)],
+                    source: "manual",
+                    progress: 0,
+                    step: false,
+                });
             window.__staleRecipeRun = {
                 previousOutputBakeId: output.bakeId,
                 previousOutputRecipeRevision: output.recipeRevision,
@@ -416,7 +423,7 @@ module.exports = {
                 previousOutputText: app.manager.output.outputEditorView.state.doc.toString(),
             };
             worker.totalOutputs = 1;
-            worker.bake(app.getRecipeConfig(), app.options, 0, false);
+            worker.bake(app.getRecipeConfig(), target);
             worker.inputs.push({
                 input: "old Recipe result",
                 inputNum,
@@ -458,6 +465,7 @@ module.exports = {
                 staleVisible: !document.getElementById("stale-indicator").classList.contains("hidden"),
                 bakeTarget: worker.bakeTarget,
                 activeRunCount: worker.chefWorkers.filter(item => item.active || item.runTarget).length,
+                terminalState: app.manager.runs.getRun(record.bakeId)?.terminalState ?? null,
             };
         }, [], ({value}) => {
             browser.assert.strictEqual(value.currentRecipeRevision, value.recipeRevisionAtStart + 1);
@@ -473,6 +481,7 @@ module.exports = {
             browser.assert.strictEqual(value.staleVisible, true);
             browser.assert.strictEqual(value.bakeTarget, null);
             browser.assert.strictEqual(value.activeRunCount, 0);
+            browser.assert.strictEqual(value.terminalState, "superseded");
         });
     },
 
@@ -557,6 +566,7 @@ module.exports = {
             const workerState = worker.chefWorkers.find(item => item.silentTarget);
             window.__silentBakeRun = {
                 silentBakeId: workerState?.silentTarget?.silentBakeId ?? null,
+                bakeId: workerState?.silentTarget?.bakeId ?? null,
                 recipeRevisionAtStart: workerState?.silentTarget?.recipeRevisionAtStart ?? null,
                 output: app.manager.output.outputs[inputNum],
                 outputText: app.manager.output.outputEditorView.state.doc.toString(),
@@ -589,12 +599,14 @@ module.exports = {
                 outputUnchanged: app.manager.output.outputs[inputNum] === record.output,
                 outputText: app.manager.output.outputEditorView.state.doc.toString(),
                 previousOutputText: record.outputText,
+                terminalState: app.manager.runs.getRun(record.bakeId)?.terminalState ?? null,
             };
         }, [], ({value}) => {
             browser.assert.strictEqual(value.pending, false);
             browser.assert.strictEqual(value.active, false);
             browser.assert.strictEqual(value.outputUnchanged, true);
             browser.assert.strictEqual(value.outputText, value.previousOutputText);
+            browser.assert.strictEqual(value.terminalState, "completed");
         });
     },
 

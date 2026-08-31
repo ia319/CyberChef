@@ -17,6 +17,14 @@ import {
     RUN_TARGET_ERROR_CODE,
     RunTargetError,
 } from "../run/RunTargetBuilder.mjs";
+import {
+    RUN_DECISION,
+    RUN_FAILURE_KIND,
+    RUN_MODE,
+    RUN_STATE,
+    getRunOwner,
+} from "../run/RunCoordinator.mjs";
+import {getRunOutcome} from "../run/RunOutcome.mjs";
 
 const MAX_PENDING_HIGHLIGHT_REQUESTS = 64;
 
@@ -123,6 +131,12 @@ class WorkerWaiter {
                 silentTarget: null,
             };
         newWorker.addEventListener("message", event => this.handleChefMessage(event, newWorkerObj));
+        newWorker.addEventListener("error", () =>
+            this.handleChefWorkerFailure(newWorkerObj, RUN_FAILURE_KIND.WORKER)
+        );
+        newWorker.addEventListener("messageerror", () =>
+            this.handleChefWorkerFailure(newWorkerObj, RUN_FAILURE_KIND.MESSAGE)
+        );
         newWorker.postMessage({
             action: "setLogPrefix",
             data: "ChefWorker"
@@ -186,6 +200,80 @@ class WorkerWaiter {
         if (this.chefWorkers.length === 0) {
             this.addChefWorker();
         }
+    }
+
+    /**
+     * Closes the task owned by a Worker after an unstructured browser failure.
+     *
+     * @param {Object} workerObj - Trusted Worker state.
+     * @param {string} failureKind - Fixed Worker failure classification.
+     * @returns {void}
+     */
+    handleChefWorkerFailure(workerObj, failureKind) {
+        if (this.chefWorkers.indexOf(workerObj) === -1) return;
+
+        if (workerObj.runTarget) {
+            const target = workerObj.runTarget,
+                inputNum = target.inputTargets[0].inputTabId;
+            if (!this.isCurrentBakeTarget(target)) {
+                this.settleStaleWorker(workerObj);
+                return;
+            }
+
+            this.manager.output.updateOutputBakeTarget(
+                target.bakeId,
+                target.recipeRevisionAtStart,
+                inputNum
+            );
+            this.manager.output.updateOutputError("Worker execution failed.", inputNum, 0);
+            this.manager.runs.settleInput(target.bakeId, inputNum, {
+                state: RUN_STATE.FAILED,
+                failureKind,
+            });
+            this.removeChefWorker(workerObj);
+
+            if (this.inputs.length > 0 && this.manager.runs.isActive(target.bakeId)) {
+                this.bakeNextInput(this.getInactiveChefWorker(true));
+            } else if (this.inputNums.length === 0 && this.loadingOutputs === 0 &&
+                !this.manager.runs.isActive(target.bakeId)) {
+                this.bakingComplete();
+            }
+            return;
+        }
+
+        if (workerObj.silentTarget) {
+            this.manager.runs.settle(
+                workerObj.silentTarget.bakeId,
+                RUN_STATE.FAILED,
+                failureKind
+            );
+        }
+        workerObj.active = true;
+        this.removeChefWorker(workerObj);
+    }
+
+    /**
+     * Stops application work after the coordinator closes or abandons a Run.
+     *
+     * @param {Object} run - Immutable coordinator snapshot.
+     * @returns {void}
+     */
+    terminateCoordinatedRun(run) {
+        if (!run) return;
+        if (this.bakeTarget?.bakeId === run.bakeId) {
+            const terminalState = run.terminalState ?? RUN_STATE.CANCELLED;
+            this.cancelBake(true, false, terminalState);
+            return;
+        }
+
+        const workerObj = this.chefWorkers.find(worker =>
+            worker.silentTarget?.bakeId === run.bakeId
+        );
+        if (!workerObj) return;
+        if (this.manager.runs.isActive(run.bakeId)) {
+            this.manager.runs.settle(run.bakeId, RUN_STATE.CANCELLED);
+        }
+        this.removeChefWorker(workerObj);
     }
 
     /**
@@ -257,6 +345,7 @@ class WorkerWaiter {
     isCurrentBakeTarget(target) {
         return !!target && !!this.bakeTarget &&
             target.bakeId === this.bakeTarget.bakeId &&
+            this.manager.runs.isActive(target.bakeId) &&
             this.manager.runTargets.executionIsCurrent(
                 target,
                 this.getCurrentExecutionState(target)
@@ -339,6 +428,9 @@ class WorkerWaiter {
         }
         this.setBakingStatus(false);
         this.totalOutputs = 0;
+        if (this.bakeTarget) {
+            this.manager.runs.settle(this.bakeTarget.bakeId, RUN_STATE.SUPERSEDED);
+        }
         this.manager.output.markRunTargetStale(this.bakeTarget);
         this.bakeTarget = null;
         document.getElementById("bake").style.background = "";
@@ -350,11 +442,8 @@ class WorkerWaiter {
      * @param {Object} workerObj - Source Worker state.
      */
     settleStaleWorker(workerObj) {
-        workerObj.active = false;
-        workerObj.inputNum = -1;
-        workerObj.runTarget = null;
-        this.dropStaleBakeQueue();
-        this.completeStaleBakeIfIdle();
+        if (!workerObj.runTarget || workerObj.runTarget.bakeId !== this.bakeTarget?.bakeId) return;
+        this.cancelBake(true, false, RUN_STATE.SUPERSEDED);
     }
 
     /**
@@ -410,7 +499,10 @@ class WorkerWaiter {
         if (policy.scope === WORKER_ACTION_SCOPE.SILENT_RUN) {
             const target = workerObj.silentTarget;
             if (!target || r.data?.silentBakeId !== target.silentBakeId ||
-                r.data?.recipeRevisionAtStart !== target.recipeRevisionAtStart) return;
+                r.data?.bakeId !== target.bakeId ||
+                r.data?.recipeRevisionAtStart !== target.recipeRevisionAtStart ||
+                !this.manager.runs.isActive(target.bakeId)) return;
+            this.manager.runs.settle(target.bakeId, RUN_STATE.COMPLETED);
             workerObj.active = false;
             workerObj.silentTarget = null;
             if (this.inputs.length > 0 && this.isCurrentBakeTarget(this.bakeTarget)) {
@@ -430,7 +522,8 @@ class WorkerWaiter {
 
         const inputNum = r.data.inputNum;
         switch (r.action) {
-            case WORKER_ACTION.BAKE_COMPLETE:
+            case WORKER_ACTION.BAKE_COMPLETE: {
+                const outcome = getRunOutcome(r.data);
                 log.debug(`Bake ${inputNum} complete.`);
                 this.manager.timing.recordTime("bakeComplete", inputNum);
                 this.manager.timing.recordTime("bakeDuration", inputNum, r.data.duration);
@@ -454,9 +547,11 @@ class WorkerWaiter {
                 }
 
                 this.app.progress = r.data.progress;
-                if (r.data.progress === this.recipeConfig.length) this.step = false;
+                if (outcome.state === RUN_STATE.COMPLETED) this.step = false;
+                this.manager.runs.settleInput(r.data.bakeId, inputNum, outcome);
                 this.workerFinished(workerObj);
                 break;
+            }
             case WORKER_ACTION.BAKE_ERROR:
                 this.app.handleError(r.data.error);
                 this.manager.output.updateOutputBakeTarget(
@@ -464,8 +559,12 @@ class WorkerWaiter {
                     r.data.recipeRevisionAtStart,
                     inputNum
                 );
-                this.manager.output.updateOutputError(r.data.error, inputNum, r.data.progress);
-                this.app.progress = r.data.progress;
+                this.manager.output.updateOutputError(r.data.error, inputNum, r.data.progress ?? 0);
+                this.app.progress = r.data.progress ?? 0;
+                this.manager.runs.settleInput(r.data.bakeId, inputNum, {
+                    state: RUN_STATE.FAILED,
+                    failureKind: RUN_FAILURE_KIND.FATAL,
+                });
                 this.workerFinished(workerObj);
                 break;
             case WORKER_ACTION.STATUS_MESSAGE:
@@ -558,26 +657,7 @@ class WorkerWaiter {
      * Cancels the current bake making it possible to autobake again
      */
     cancelBakeForAutoBake() {
-        const staleTarget = this.bakeTarget;
-        if (this.totalOutputs > 1) {
-            this.cancelBake();
-            this.manager.output.markRunTargetStale(staleTarget);
-        } else {
-            // In this case the UI changes can be skipped
-
-            for (let i = this.chefWorkers.length - 1; i >= 0; i--) {
-                if (this.chefWorkers[i].active) {
-                    this.removeChefWorker(this.chefWorkers[i]);
-                }
-            }
-
-            this.inputs = [];
-            this.inputNums = [];
-            this.totalOutputs = 0;
-            this.loadingOutputs = 0;
-            this.manager.output.markRunTargetStale(staleTarget);
-            this.bakeTarget = null;
-        }
+        this.cancelBake(true, false, RUN_STATE.SUPERSEDED);
     }
 
     /**
@@ -585,12 +665,23 @@ class WorkerWaiter {
      *
      * @param {boolean} [silent=false] - If true, don't set the output
      * @param {boolean} [killAll=false] - If true, kills all chefWorkers regardless of status
+     * @param {string|null} [terminalState=RUN_STATE.CANCELLED] - Run state caused by cancellation.
      */
-    cancelBake(silent=false, killAll=false) {
+    cancelBake(silent=false, killAll=false, terminalState=RUN_STATE.CANCELLED) {
+        const target = this.bakeTarget;
+        if (target && terminalState) {
+            this.manager.runs.settle(target.bakeId, terminalState);
+        }
         const deactiveOutputs = new Set();
 
         for (let i = this.chefWorkers.length - 1; i >= 0; i--) {
             if (this.chefWorkers[i].active || killAll) {
+                if (this.chefWorkers[i].silentTarget) {
+                    this.manager.runs.settle(
+                        this.chefWorkers[i].silentTarget.bakeId,
+                        terminalState ?? RUN_STATE.CANCELLED
+                    );
+                }
                 const inputNum = this.chefWorkers[i].inputNum;
                 this.removeChefWorker(this.chefWorkers[i]);
                 deactiveOutputs.add(inputNum);
@@ -607,7 +698,13 @@ class WorkerWaiter {
         });
 
         deactiveOutputs.forEach(num => {
-            this.manager.output.updateOutputStatus("inactive", num);
+            if (terminalState === RUN_STATE.SUPERSEDED) {
+                this.manager.output.updateOutputStatus("stale", num);
+            } else if (terminalState === RUN_STATE.TIMED_OUT) {
+                this.manager.output.updateOutputError("Bake timed out.", num, 0);
+            } else {
+                this.manager.output.updateOutputStatus("inactive", num);
+            }
         });
 
         const tabList = this.manager.tabs.getTabList("output");
@@ -620,6 +717,9 @@ class WorkerWaiter {
         this.totalOutputs = 0;
         this.loadingOutputs = 0;
         this.bakeTarget = null;
+        if (terminalState === RUN_STATE.SUPERSEDED) {
+            this.manager.output.markRunTargetStale(target);
+        }
         if (!silent) this.manager.output.set(this.manager.tabs.getActiveTab("output"));
     }
 
@@ -728,6 +828,7 @@ class WorkerWaiter {
             this.bakeTarget,
             nextInput.inputNum
         );
+        this.manager.runs.markRunning(this.bakeTarget.bakeId, nextInput.inputNum);
         const input = nextInput.input,
             recipeConfig = this.recipeConfig;
 
@@ -750,17 +851,25 @@ class WorkerWaiter {
             transferable = [input];
         }
         this.manager.timing.recordTime("chefWorkerTasked", nextInput.inputNum);
-        this.chefWorkers[workerIdx].worker.postMessage({
-            action: "bake",
-            data: {
-                input: input,
-                recipeConfig: recipeConfig,
-                options: this.bakeTarget.executionOptions,
-                inputNum: nextInput.inputNum,
-                bakeId: this.bakeTarget.bakeId,
-                recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
-            }
-        }, transferable);
+        try {
+            this.chefWorkers[workerIdx].worker.postMessage({
+                action: "bake",
+                data: {
+                    input: input,
+                    recipeConfig: recipeConfig,
+                    options: this.bakeTarget.executionOptions,
+                    inputNum: nextInput.inputNum,
+                    bakeId: this.bakeTarget.bakeId,
+                    recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
+                }
+            }, transferable);
+        } catch {
+            this.handleChefWorkerFailure(
+                this.chefWorkers[workerIdx],
+                RUN_FAILURE_KIND.PROTOCOL
+            );
+            return;
+        }
 
         if (this.inputNums.length > 0) {
             this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
@@ -774,18 +883,32 @@ class WorkerWaiter {
      * @param {Object} target - Immutable workspace execution target.
      */
     bake(recipeConfig, target) {
-        const boundTarget = this.manager.runTargets.bindBakeId(target, this.bakeId + 1);
-        this.bakeId = boundTarget.bakeId;
-        this.bakeTarget = boundTarget;
+        const owner = getRunOwner(target.source);
+        if (!owner) {
+            throw new RunTargetError(
+                RUN_TARGET_ERROR_CODE.INVALID_TARGET,
+                "Run source is invalid"
+            );
+        }
+        const request = this.manager.runs.ensure(target, {
+            owner,
+            mode: target.source,
+            reuseFresh: false,
+        });
+        if (request.decision !== RUN_DECISION.STARTED) return request;
+
+        this.bakeId = request.run.bakeId;
+        this.bakeTarget = request.run.target;
         this.recipeConfig = recipeConfig;
-        this.progress = boundTarget.progress;
-        this.step = boundTarget.step;
+        this.progress = this.bakeTarget.progress;
+        this.step = this.bakeTarget.step;
 
         this.setBakingStatus(true);
         this.manager.recipe.updateBreakpointIndicator(false);
         this.bakeStartTime = Date.now();
 
         this.displayProgress();
+        return request;
     }
 
     /**
@@ -831,11 +954,17 @@ class WorkerWaiter {
                 inputData.inputNum
             );
             this.manager.output.updateOutputError("Error queueing the input for a bake.", inputData.inputNum, 0);
+            this.manager.runs.settleInput(this.bakeTarget.bakeId, inputData.inputNum, {
+                state: RUN_STATE.FAILED,
+                failureKind: RUN_FAILURE_KIND.QUEUE,
+            });
 
-            if (this.inputNums.length === 0) return;
-
-            // Load the next input
-            this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
+            if (this.inputNums.length > 0) {
+                this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
+            } else if (this.loadingOutputs === 0 && this.inputs.length === 0 &&
+                !this.chefWorkers.some(worker => worker.active && worker.runTarget)) {
+                this.bakingComplete();
+            }
         } else {
             this.dropStaleBakeQueue();
             this.completeStaleBakeIfIdle();
@@ -871,44 +1000,56 @@ class WorkerWaiter {
         }
         log.debug(`Baking input list [${inputData.nums.join(",")}]`);
 
-        return await new Promise(resolve => {
-            const inputNums = inputData.nums.filter(n => n > 0);
+        const inputNums = inputData.nums.filter(n => n > 0);
 
-            // Use cancelBake to clear out the inputs
-            this.cancelBake(true, false);
+        this.cancelBake(true, false);
 
-            this.inputNums = inputNums;
-            this.totalOutputs = inputNums.length;
-            this.app.progress = inputData.progress;
+        this.inputNums = inputNums;
+        this.totalOutputs = inputNums.length;
+        this.app.progress = inputData.progress;
 
-            let inactiveWorkers = 0;
-            for (let i = 0; i < this.chefWorkers.length; i++) {
-                if (!this.chefWorkers[i].active) {
-                    inactiveWorkers++;
-                }
+        let inactiveWorkers = 0;
+        for (let i = 0; i < this.chefWorkers.length; i++) {
+            if (!this.chefWorkers[i].active) {
+                inactiveWorkers++;
             }
+        }
 
-            for (let i = 0; i < inputNums.length - inactiveWorkers; i++) {
-                if (this.addChefWorker() === -1) break;
-            }
+        for (let i = 0; i < inputNums.length - inactiveWorkers; i++) {
+            if (this.addChefWorker() === -1) break;
+        }
 
-            this.app.bake(target);
+        const runRequest = this.app.bake(target);
+        if (!runRequest || runRequest.decision !== RUN_DECISION.STARTED) {
+            this.inputs = [];
+            this.inputNums = [];
+            this.totalOutputs = 0;
+            this.loadingOutputs = 0;
+            return runRequest?.completion ?? null;
+        }
 
-            for (let i = 0; i < this.inputNums.length; i++) {
-                this.manager.output.updateOutputMessage(`Input ${inputNums[i]} has not been baked yet.`, inputNums[i], false);
-                this.manager.output.updateOutputStatus("pending", inputNums[i]);
-            }
+        for (let i = 0; i < this.inputNums.length; i++) {
+            this.manager.output.updateOutputMessage(`Input ${inputNums[i]} has not been baked yet.`, inputNums[i], false);
+            this.manager.output.updateOutputStatus("pending", inputNums[i]);
+        }
 
-            let numBakes = this.chefWorkers.length;
-            if (this.inputNums.length < numBakes) {
-                numBakes = this.inputNums.length;
-            }
-            for (let i = 0; i < numBakes; i++) {
-                this.manager.timing.recordTime("trigger", this.inputNums[0]);
-                this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
-            }
-            if (numBakes === 0) this.bakingComplete();
-        });
+        let numBakes = this.chefWorkers.length;
+        if (this.inputNums.length < numBakes) {
+            numBakes = this.inputNums.length;
+        }
+        for (let i = 0; i < numBakes; i++) {
+            this.manager.timing.recordTime("trigger", this.inputNums[0]);
+            this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
+        }
+        if (numBakes === 0) {
+            this.manager.runs.settle(
+                runRequest.run.bakeId,
+                RUN_STATE.FAILED,
+                RUN_FAILURE_KIND.WORKER
+            );
+            this.bakingComplete();
+        }
+        return await runRequest.completion;
     }
 
     /**
@@ -918,27 +1059,54 @@ class WorkerWaiter {
      * @param {Object[]} [recipeConfig]
      */
     silentBake(recipeConfig) {
-        // If there aren't any active ChefWorkers, try to add one
+        if (this.silentBakeID === Number.MAX_SAFE_INTEGER) return;
+        const target = Object.freeze({
+            source: RUN_MODE.SILENT,
+            silentBakeId: ++this.silentBakeID,
+            recipeRevisionAtStart: this.manager.recipe.getRecipeRevision(),
+            inputTargets: Object.freeze([]),
+        });
+        const runRequest = this.manager.runs.ensure(target, {
+            owner: getRunOwner(RUN_MODE.SILENT),
+            mode: RUN_MODE.SILENT,
+            reuseFresh: false,
+            timeoutMs: 30000,
+        });
+        if (runRequest.decision !== RUN_DECISION.STARTED) return runRequest.completion;
+
         let workerId = this.getInactiveChefWorker();
         if (workerId === -1) {
             workerId = this.addChefWorker();
         }
-        if (workerId === -1) return;
-        if (this.silentBakeID === Number.MAX_SAFE_INTEGER) return;
-        const target = Object.freeze({
-            silentBakeId: ++this.silentBakeID,
-            recipeRevisionAtStart: this.manager.recipe.getRecipeRevision(),
-        });
+        if (workerId === -1) {
+            this.manager.runs.settle(
+                runRequest.run.bakeId,
+                RUN_STATE.FAILED,
+                RUN_FAILURE_KIND.WORKER
+            );
+            return runRequest.completion;
+        }
+
         this.chefWorkers[workerId].active = true;
-        this.chefWorkers[workerId].silentTarget = target;
-        this.chefWorkers[workerId].worker.postMessage({
-            action: "silentBake",
-            data: {
-                recipeConfig: recipeConfig,
-                silentBakeId: target.silentBakeId,
-                recipeRevisionAtStart: target.recipeRevisionAtStart,
-            }
-        });
+        this.chefWorkers[workerId].silentTarget = runRequest.run.target;
+        this.manager.runs.markRunning(runRequest.run.bakeId);
+        try {
+            this.chefWorkers[workerId].worker.postMessage({
+                action: "silentBake",
+                data: {
+                    recipeConfig: recipeConfig,
+                    silentBakeId: target.silentBakeId,
+                    bakeId: runRequest.run.bakeId,
+                    recipeRevisionAtStart: target.recipeRevisionAtStart,
+                }
+            });
+        } catch {
+            this.handleChefWorkerFailure(
+                this.chefWorkers[workerId],
+                RUN_FAILURE_KIND.PROTOCOL
+            );
+        }
+        return runRequest.completion;
     }
 
     /**

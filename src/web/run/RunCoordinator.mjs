@@ -111,6 +111,29 @@ function targetCovers(candidate, requested) {
 
 
 /**
+ * Maps a trusted execution mode to the owner that may control its lifecycle.
+ *
+ * @param {string} mode - Run mode.
+ * @returns {string|null} Trusted owner or null for an unknown mode.
+ */
+function getRunOwner(mode) {
+    switch (mode) {
+        case RUN_MODE.AGENT:
+            return RUN_OWNER.AGENT;
+        case RUN_MODE.MANUAL:
+        case RUN_MODE.STEP:
+            return RUN_OWNER.USER;
+        case RUN_MODE.AUTO:
+        case RUN_MODE.INITIAL:
+        case RUN_MODE.SILENT:
+            return RUN_OWNER.SYSTEM;
+        default:
+            return null;
+    }
+}
+
+
+/**
  * Coordinates immutable Run records, completion waiters and terminal transitions.
  */
 class RunCoordinator {
@@ -130,8 +153,8 @@ class RunCoordinator {
      * @param {Function|null} [options.onTimeout=null] - Run timeout callback.
      */
     constructor(options={}) {
-        this.#setTimeout = options.setTimeoutFn ?? setTimeout;
-        this.#clearTimeout = options.clearTimeoutFn ?? clearTimeout;
+        this.#setTimeout = options.setTimeoutFn ?? globalThis.setTimeout.bind(globalThis);
+        this.#clearTimeout = options.clearTimeoutFn ?? globalThis.clearTimeout.bind(globalThis);
         this.#onExclusiveAgentAbort = options.onExclusiveAgentAbort ?? null;
         this.#onTimeout = options.onTimeout ?? null;
     }
@@ -145,12 +168,13 @@ class RunCoordinator {
      * @param {string} request.mode - Run mode.
      * @param {AbortSignal|null} [request.signal=null] - Optional waiter cancellation signal.
      * @param {number} [request.timeoutMs=120000] - Run timeout budget.
+     * @param {boolean} [request.reuseFresh=true] - Whether completed work may satisfy the request.
      * @returns {Object} Decision, content-free Run snapshot and optional completion Promise.
      */
     ensure(target, request) {
         this.#validateRequest(target, request);
 
-        const fresh = this.#findFreshRun(target);
+        const fresh = request.reuseFresh === false ? null : this.#findFreshRun(target);
         if (fresh) {
             return Object.freeze({
                 decision: RUN_DECISION.ALREADY_FRESH,
@@ -507,7 +531,8 @@ class RunCoordinator {
             (request.mode !== RUN_MODE.SILENT &&
                 (!Array.isArray(target.inputTargets) || target.inputTargets.length < 1)) ||
             (request.timeoutMs !== undefined &&
-                (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 0))) {
+                (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 0)) ||
+            (request.reuseFresh !== undefined && typeof request.reuseFresh !== "boolean")) {
             throw new RunWaiterError(
                 RUN_WAITER_ERROR_CODE.INVALID_RUN,
                 "Run request is invalid"
@@ -526,5 +551,6 @@ export {
     RUN_WAITER_ERROR_CODE,
     RunCoordinator,
     RunWaiterError,
+    getRunOwner,
     targetCovers,
 };

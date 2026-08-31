@@ -42,8 +42,7 @@ TestRegister.addApiTests([
     it("RunTargetBuilder: should capture an immutable active target", () => {
         const builder = new RunTargetBuilder(),
             captured = builder.capture(createState()),
-            bound = builder.bindBakeId(captured, 9),
-            active = builder.requireActiveTarget(bound);
+            active = builder.requireActiveTarget(captured);
 
         assert.equal(Object.isFrozen(active), true);
         assert.equal(Object.isFrozen(active.inputTargets), true);
@@ -66,7 +65,6 @@ TestRegister.addApiTests([
             viewVersion: 5,
             progress: 0,
             step: false,
-            bakeId: 9,
         });
     }),
 

@@ -144,6 +144,7 @@ async function silentBake(data) {
         data: {
             duration: duration,
             silentBakeId: data.silentBakeId,
+            bakeId: data.bakeId,
             recipeRevisionAtStart: data.recipeRevisionAtStart,
         }
     });

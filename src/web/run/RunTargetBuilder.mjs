@@ -155,24 +155,6 @@ class RunTargetBuilder {
     }
 
     /**
-     * Binds a newly allocated Bake identity to a captured workspace target.
-     *
-     * @param {Object} target - Captured workspace target.
-     * @param {number} bakeId - New Bake identity.
-     * @returns {Object} Immutable bound target.
-     */
-    bindBakeId(target, bakeId) {
-        if (!target || !Number.isSafeInteger(bakeId) || bakeId < 1 ||
-            Object.prototype.hasOwnProperty.call(target, "bakeId")) {
-            throw new RunTargetError(
-                RUN_TARGET_ERROR_CODE.INVALID_TARGET,
-                "Bake target identity is invalid"
-            );
-        }
-        return Object.freeze({...target, bakeId});
-    }
-
-    /**
      * Narrows a captured target to one Input and its corresponding Output.
      *
      * @param {Object} target - Captured or bound workspace target.

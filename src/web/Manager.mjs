@@ -25,6 +25,7 @@ import {AGENT_RECIPE_PATCH_POLICY} from "./webmcp/AgentRecipePatchPolicy.mjs";
 import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
 import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
 import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
+import {RunCoordinator} from "./run/RunCoordinator.mjs";
 
 
 /**
@@ -67,6 +68,11 @@ class Manager {
         this.statechange = new CustomEvent("statechange", {bubbles: true});
 
         // Define Waiter objects to handle various areas
+        this.runTargets  = new RunTargetBuilder();
+        this.runs        = new RunCoordinator({
+            onExclusiveAgentAbort: run => this.worker?.terminateCoordinatedRun(run),
+            onTimeout: run => this.worker?.terminateCoordinatedRun(run),
+        });
         this.timing      = new TimingWaiter(this.app, this);
         this.worker      = new WorkerWaiter(this.app, this);
         this.window      = new WindowWaiter(this.app);
@@ -77,7 +83,6 @@ class Manager {
         this.input       = new InputWaiter(this.app, this);
         this.output      = new OutputWaiter(this.app, this);
         this.options     = new OptionsWaiter(this.app, this);
-        this.runTargets  = new RunTargetBuilder();
         this.highlighter = new HighlighterWaiter(this.app, this);
         this.seasonal    = new SeasonalWaiter(this.app, this);
         this.bindings    = new BindingsWaiter(this.app, this);

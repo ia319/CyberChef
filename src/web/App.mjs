@@ -143,7 +143,7 @@ class App {
      * @param {Object} target - Immutable workspace execution target.
      */
     bake(target) {
-        if (this.baking) return;
+        if (this.baking) return null;
 
         // Record which state version this bake is covering.
         this.bakeStateId = this.stateChangeId;
@@ -154,7 +154,7 @@ class App {
         // Remove all current indicators
         this.manager.recipe.updateBreakpointIndicator(false);
 
-        this.manager.worker.bake(
+        return this.manager.worker.bake(
             this.getRecipeConfig(), // The configuration of the recipe
             target
         );

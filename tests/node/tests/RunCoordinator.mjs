@@ -7,6 +7,7 @@ import {
     RUN_STATE,
     RUN_WAITER_ERROR_CODE,
     RunCoordinator,
+    getRunOwner,
 } from "../../../src/web/run/RunCoordinator.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
@@ -40,6 +41,16 @@ function createTarget(overrides={}) {
 
 
 TestRegister.addApiTests([
+    it("RunCoordinator: should assign lifecycle ownership by mode", () => {
+        assert.equal(getRunOwner(RUN_MODE.MANUAL), RUN_OWNER.USER);
+        assert.equal(getRunOwner(RUN_MODE.STEP), RUN_OWNER.USER);
+        assert.equal(getRunOwner(RUN_MODE.AUTO), RUN_OWNER.SYSTEM);
+        assert.equal(getRunOwner(RUN_MODE.INITIAL), RUN_OWNER.SYSTEM);
+        assert.equal(getRunOwner(RUN_MODE.SILENT), RUN_OWNER.SYSTEM);
+        assert.equal(getRunOwner(RUN_MODE.AGENT), RUN_OWNER.AGENT);
+        assert.equal(getRunOwner("unknown"), null);
+    }),
+
     it("RunCoordinator: should settle a multi-Input Run exactly once", async () => {
         const coordinator = new RunCoordinator(),
             target = createTarget({
@@ -110,6 +121,15 @@ TestRegister.addApiTests([
         });
         assert.equal(fresh.decision, RUN_DECISION.ALREADY_FRESH);
         assert.equal((await fresh.completion).bakeId, started.run.bakeId);
+
+        const forced = coordinator.ensure(target, {
+            owner: RUN_OWNER.USER,
+            mode: RUN_MODE.MANUAL,
+            reuseFresh: false,
+        });
+        assert.equal(forced.decision, RUN_DECISION.STARTED);
+        coordinator.settle(forced.run.bakeId, RUN_STATE.CANCELLED);
+        await forced.completion;
     }),
 
     it("RunCoordinator: should aggregate expected and fatal failures", async () => {

@@ -5,7 +5,8 @@
  */
 
 import Dish from "./Dish.mjs";
-import Recipe, {RECIPE_EXECUTION_STATE} from "./Recipe.mjs";
+import Recipe from "./Recipe.mjs";
+import {RECIPE_EXECUTION_STATE} from "./ExecutionState.mjs";
 import log from "loglevel";
 import { isWorkerEnvironment } from "./Utils.mjs";
 

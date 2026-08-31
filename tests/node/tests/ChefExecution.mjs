@@ -1,6 +1,6 @@
 import assert from "assert";
 import Chef from "../../../src/core/Chef.mjs";
-import {RECIPE_EXECUTION_STATE} from "../../../src/core/Recipe.mjs";
+import {RECIPE_EXECUTION_STATE} from "../../../src/core/ExecutionState.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 

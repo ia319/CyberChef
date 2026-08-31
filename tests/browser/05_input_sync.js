@@ -67,6 +67,7 @@ module.exports = {
 
                 const storedValue = await input.getInputValue(inputNum),
                     output = app.manager.output.outputs[inputNum],
+                    run = manager.runs.getRun(capturedTarget.bakeId),
                     decode = value => typeof value === "string" ? value :
                         new TextDecoder().decode(value);
                 if (!capturedTarget) throw new Error("Bake target was not captured");
@@ -94,6 +95,13 @@ module.exports = {
                     storedValue: decode(storedValue),
                     outputStatus: output.status,
                     outputValue: decode(output.data.result),
+                    run: {
+                        state: run.state,
+                        terminalState: run.terminalState,
+                        owner: run.owner,
+                        mode: run.mode,
+                        inputState: run.inputs[0].state,
+                    },
                     target: {
                         source: capturedTarget.source,
                         inputGeneration: targetInput.inputGeneration,
@@ -133,6 +141,13 @@ module.exports = {
             browser.assert.strictEqual(value.storedValue, "latest input");
             browser.assert.strictEqual(value.outputStatus, "baked");
             browser.assert.strictEqual(value.outputValue, "bGF0ZXN0IGlucHV0");
+            browser.assert.deepStrictEqual(value.run, {
+                state: "completed",
+                terminalState: "completed",
+                owner: "user",
+                mode: "manual",
+                inputState: "completed",
+            });
             browser.assert.strictEqual(value.target.source, "manual");
             browser.assert.strictEqual(
                 value.target.inputGeneration,
