@@ -149,4 +149,22 @@ TestRegister.addApiTests([
         assert.equal(handlerSignal.aborted, true);
         assert.equal(session.getState().state, COLLABORATION_SESSION_STATE.ACTIVE);
     }),
+
+    it("WebMCPCollaborationSession: should keep application work bound after handler return", async () => {
+        const session = new CollaborationSession(true);
+        let applicationWork;
+
+        session.start();
+        const result = await session.execute(async (input, invocation) => {
+            applicationWork = invocation.createApplicationWork();
+            return {data: {status: "started"}};
+        }, {});
+
+        assert.equal(result.data.status, "started");
+        assert.equal(applicationWork.signal.aborted, false);
+        session.stop();
+        assert.equal(applicationWork.signal.aborted, true);
+        applicationWork.close();
+        applicationWork.close();
+    }),
 ]);

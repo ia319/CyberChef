@@ -424,7 +424,14 @@ module.exports = {
                 const synchronizedInput = await input.flushActiveInput(),
                     before = recipe.getReadProjection(),
                     stepId = before.steps[0].stepId,
-                    bakeIdBefore = manager.worker.bakeId;
+                    bakeIdBefore = manager.worker.bakeId,
+                    createApplicationWork = () => {
+                        const controller = new AbortController();
+                        return {
+                            signal: controller.signal,
+                            close: () => {},
+                        };
+                    };
 
                 manager.controls.setAutoBake(true);
                 const result = recipe.applyAgentPatch({
@@ -435,7 +442,7 @@ module.exports = {
                         argumentIndex: 0,
                         value: "A-Za-z0-9-_",
                     }],
-                });
+                }, createApplicationWork);
 
                 const deadline = Date.now() + 10000;
                 while (manager.output.outputs[inputNum].status !== "baked" &&
@@ -455,7 +462,7 @@ module.exports = {
                         argumentIndex: 0,
                         value: "A-Za-z0-9+/=",
                     }],
-                });
+                }, createApplicationWork);
                 await new Promise(resolve => setTimeout(resolve, 100));
                 const bakeIdBeforeRace = manager.worker.bakeId;
 
@@ -475,7 +482,7 @@ module.exports = {
                         argumentIndex: 0,
                         value: "A-Za-z0-9-_",
                     }],
-                });
+                }, createApplicationWork);
                 await new Promise(resolve => setTimeout(resolve, 100));
 
                 done({

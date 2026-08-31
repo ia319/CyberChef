@@ -547,9 +547,10 @@ class RecipeWaiter {
      * Applies an authorized Agent patch to the visible Recipe.
      *
      * @param {Object} input - Detached Agent patch request.
+     * @param {Function|null} [applicationWorkFactory=null] - Session-bound Run lifetime factory.
      * @returns {Object} Bounded transaction result.
      */
-    applyAgentPatch(input) {
+    applyAgentPatch(input, applicationWorkFactory=null) {
         if (this.app.baking) {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
         }
@@ -581,7 +582,11 @@ class RecipeWaiter {
             },
             result = this.transaction.applyAgentPatch(input, transactionPolicy);
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
-            this.app.agentRecipeTransactionCommitted(result.change, autoBakeTarget);
+            this.app.agentRecipeTransactionCommitted(
+                result.change,
+                autoBakeTarget,
+                applicationWorkFactory
+            );
             this.adjustWidth();
         }
         return result;

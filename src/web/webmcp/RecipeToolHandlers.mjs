@@ -148,7 +148,10 @@ function createRecipeToolHandlers(recipeWaiter) {
 
         let result;
         try {
-            result = recipeWaiter.applyAgentPatch(input);
+            result = recipeWaiter.applyAgentPatch(
+                input,
+                () => invocation.createApplicationWork()
+            );
         } catch (err) {
             throw new ToolExecutionError(mapRecipeTransactionError(err));
         }

@@ -823,8 +823,13 @@ class App {
      *
      * @param {Object} change - Trusted structured Recipe change.
      * @param {Object|null} [autoBakeTarget=null] - Authorized immutable Agent execution target.
+     * @param {Function|null} [applicationWorkFactory=null] - Session-bound Run lifetime factory.
      */
-    agentRecipeTransactionCommitted(change, autoBakeTarget=null) {
+    agentRecipeTransactionCommitted(
+        change,
+        autoBakeTarget=null,
+        applicationWorkFactory=null
+    ) {
         cancelDebounce("stateChange");
         this.progress = 0;
         this.stateChangeId++;
@@ -832,7 +837,23 @@ class App {
         this.manager.output.markRecipeStale();
         this.updateURL(true, null, true);
         window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
-        if (autoBakeTarget) this.manager.worker.bakeAgentTarget(autoBakeTarget);
+        if (!autoBakeTarget || typeof applicationWorkFactory !== "function") return;
+
+        const applicationWork = applicationWorkFactory();
+        try {
+            const request = this.manager.worker.bakeAgentTarget(
+                autoBakeTarget,
+                applicationWork.signal
+            );
+            if (request?.completion) {
+                request.completion.then(applicationWork.close, applicationWork.close);
+            } else {
+                applicationWork.close();
+            }
+        } catch (err) {
+            applicationWork.close();
+            throw err;
+        }
     }
 
 

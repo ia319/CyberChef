@@ -80,6 +80,38 @@ class CollaborationInvocation {
 
 
     /**
+     * Creates a cancellable application-work lifetime that survives handler return.
+     *
+     * @returns {Object} Session-bound signal and idempotent listener cleanup.
+     */
+    createApplicationWork() {
+        this.checkpoint();
+        const controller = new AbortController();
+        let closed = false;
+        const handleInvocationAbort = () => controller.abort(this.#invocationSignal.reason),
+            handleSessionAbort = () => controller.abort(this.#sessionSignal.reason),
+            close = () => {
+                if (closed) return;
+                closed = true;
+                this.#invocationSignal?.removeEventListener("abort", handleInvocationAbort);
+                this.#sessionSignal.removeEventListener("abort", handleSessionAbort);
+            };
+
+        if (this.#invocationSignal) {
+            if (this.#invocationSignal.aborted) handleInvocationAbort();
+            else this.#invocationSignal.addEventListener("abort", handleInvocationAbort, {once: true});
+        }
+        if (this.#sessionSignal.aborted) handleSessionAbort();
+        else this.#sessionSignal.addEventListener("abort", handleSessionAbort, {once: true});
+
+        return Object.freeze({
+            signal: controller.signal,
+            close,
+        });
+    }
+
+
+    /**
      * Rejects cancelled invocations and invocations from an ended session.
      */
     checkpoint() {
