@@ -15,6 +15,23 @@ import {
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
+const EXPECTED_RECIPE_TOOL_NAMES = Object.freeze([
+    TOOL_NAME.SEARCH_OPERATIONS,
+    TOOL_NAME.GET_OPERATION_DETAILS,
+    TOOL_NAME.GET_RECIPE_STATE,
+    TOOL_NAME.APPLY_RECIPE_PATCH,
+]);
+
+const EXPECTED_RUN_TOOL_NAMES = Object.freeze([
+    ...EXPECTED_RECIPE_TOOL_NAMES,
+    TOOL_NAME.BAKE_RECIPE,
+]);
+
+const EXPECTED_ANALYSIS_TOOL_NAMES = Object.freeze([
+    ...EXPECTED_RUN_TOOL_NAMES,
+    TOOL_NAME.INSPECT_OUTPUT,
+]);
+
 const VALID_INPUTS = Object.freeze({
     [TOOL_NAME.SEARCH_OPERATIONS]: {query: "base64", limit: 5, offset: 0},
     [TOOL_NAME.GET_OPERATION_DETAILS]: {
@@ -60,7 +77,8 @@ const collectDescriptions = schema => {
 
 TestRegister.addApiTests([
     it("WebMCPToolDefinitions: should define six fixed formal metadata contracts", () => {
-        assert.deepStrictEqual(Object.keys(TOOL_CONTRACTS), FORMAL_TOOL_NAMES);
+        assert.deepStrictEqual(FORMAL_TOOL_NAMES, EXPECTED_ANALYSIS_TOOL_NAMES);
+        assert.deepStrictEqual(Object.keys(TOOL_CONTRACTS), EXPECTED_ANALYSIS_TOOL_NAMES);
         assert.equal(FORMAL_TOOL_NAMES.length, 6);
 
         for (const name of FORMAL_TOOL_NAMES) {
@@ -155,15 +173,21 @@ TestRegister.addApiTests([
 
     it("WebMCPToolDefinitions: should keep capability profiles cumulative", () => {
         assert.deepStrictEqual(BUILD_PROFILES[PROFILE_NAME.READINESS].toolNames, [READINESS_TOOL_NAME]);
-        assert.deepStrictEqual(BUILD_PROFILES[PROFILE_NAME.RECIPE].toolNames, FORMAL_TOOL_NAMES.slice(0, 4));
-        assert.deepStrictEqual(BUILD_PROFILES[PROFILE_NAME.RUN].toolNames, FORMAL_TOOL_NAMES.slice(0, 5));
-        assert.deepStrictEqual(BUILD_PROFILES[PROFILE_NAME.ANALYSIS].toolNames, FORMAL_TOOL_NAMES);
+        assert.deepStrictEqual(
+            BUILD_PROFILES[PROFILE_NAME.RECIPE].toolNames,
+            EXPECTED_RECIPE_TOOL_NAMES
+        );
+        assert.deepStrictEqual(BUILD_PROFILES[PROFILE_NAME.RUN].toolNames, EXPECTED_RUN_TOOL_NAMES);
+        assert.deepStrictEqual(
+            BUILD_PROFILES[PROFILE_NAME.ANALYSIS].toolNames,
+            EXPECTED_ANALYSIS_TOOL_NAMES
+        );
         assertDeeplyFrozen(BUILD_PROFILES);
     }),
 
     it("WebMCPToolDefinitions: should expose the candidate Analysis capability", () => {
         assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.ANALYSIS);
-        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, FORMAL_TOOL_NAMES);
+        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, EXPECTED_ANALYSIS_TOOL_NAMES);
         assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.stateFields, [
             "sessionEpoch",
             "recipeRevision",

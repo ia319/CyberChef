@@ -1,6 +1,6 @@
 import {
-    FORMAL_TOOL_NAMES,
     READINESS_TOOL_NAME,
+    TOOL_NAME,
 } from "./ToolDefinitions.mjs";
 
 const PROFILE_NAME = Object.freeze({
@@ -9,6 +9,23 @@ const PROFILE_NAME = Object.freeze({
     RUN: "run",
     ANALYSIS: "analysis",
 });
+
+const RECIPE_TOOL_NAMES = Object.freeze([
+    TOOL_NAME.SEARCH_OPERATIONS,
+    TOOL_NAME.GET_OPERATION_DETAILS,
+    TOOL_NAME.GET_RECIPE_STATE,
+    TOOL_NAME.APPLY_RECIPE_PATCH,
+]);
+
+const RUN_TOOL_NAMES = Object.freeze([
+    ...RECIPE_TOOL_NAMES,
+    TOOL_NAME.BAKE_RECIPE,
+]);
+
+const ANALYSIS_TOOL_NAMES = Object.freeze([
+    ...RUN_TOOL_NAMES,
+    TOOL_NAME.INSPECT_OUTPUT,
+]);
 
 const RECIPE_STATE_FIELDS = Object.freeze([
     "sessionEpoch",
@@ -44,19 +61,19 @@ const BUILD_PROFILES = {
     },
     [PROFILE_NAME.RECIPE]: {
         name: PROFILE_NAME.RECIPE,
-        toolNames: FORMAL_TOOL_NAMES.slice(0, 4),
+        toolNames: RECIPE_TOOL_NAMES,
         stateFields: RECIPE_STATE_FIELDS,
         authorizationText: "Allows WebMCP tools to search Operations, read redacted Recipe structure, and apply visible Recipe changes. WebMCP changes do not run automatically; the user runs Bake to check results.",
     },
     [PROFILE_NAME.RUN]: {
         name: PROFILE_NAME.RUN,
-        toolNames: FORMAL_TOOL_NAMES.slice(0, 5),
+        toolNames: RUN_TOOL_NAMES,
         stateFields: RUN_STATE_FIELDS,
         authorizationText: "Allows WebMCP tools to search Operations, read and change redacted Recipe structure, and request a run for the active Input. The visible Output remains available for user review.",
     },
     [PROFILE_NAME.ANALYSIS]: {
         name: PROFILE_NAME.ANALYSIS,
-        toolNames: FORMAL_TOOL_NAMES,
+        toolNames: ANALYSIS_TOOL_NAMES,
         stateFields: ANALYSIS_STATE_FIELDS,
         authorizationText: "Allows WebMCP tools to search Operations, read and change redacted Recipe structure, request a run for the active Input, and receive bounded Output-derived analysis. The visible Output remains available for user review.",
     },
