@@ -8,6 +8,30 @@ import Utils from "../core/Utils.mjs";
 
 const RECIPE_INGREDIENT_HANDLER_GROUP = "recipeIngredient";
 
+
+/**
+ * Applies the selected argument layout without emitting a Recipe change.
+ *
+ * @param {HTMLSelectElement} selector - Argument layout selector.
+ */
+function applyArgSelectorVisibility(selector) {
+    const option = selector.options[selector.selectedIndex],
+        operation = selector.closest(".operation"),
+        args = operation.querySelectorAll(".ingredients .form-group"),
+        turnon = JSON.parse(option.getAttribute("turnon")),
+        turnoff = JSON.parse(option.getAttribute("turnoff"));
+
+    args.forEach((arg, index) => {
+        if (turnon.includes(index)) {
+            arg.classList.remove("d-none");
+        }
+        if (turnoff.includes(index)) {
+            arg.classList.add("d-none");
+        }
+    });
+}
+
+
 /**
  * Object to handle the creation of operation ingredients.
  */
@@ -385,26 +409,13 @@ class HTMLIngredient {
     argSelectorChange(e) {
         e.preventDefault();
         e.stopPropagation();
-
-        const option = e.target.options[e.target.selectedIndex];
-        const op = e.target.closest(".operation");
-        const args = op.querySelectorAll(".ingredients .form-group");
-        const turnon = JSON.parse(option.getAttribute("turnon"));
-        const turnoff = JSON.parse(option.getAttribute("turnoff"));
-
-        args.forEach((arg, i) => {
-            if (turnon.includes(i)) {
-                arg.classList.remove("d-none");
-            }
-            if (turnoff.includes(i)) {
-                arg.classList.add("d-none");
-            }
-        });
+        applyArgSelectorVisibility(e.target);
     }
 
 }
 
 export {
+    applyArgSelectorVisibility,
     RECIPE_INGREDIENT_HANDLER_GROUP,
 };
 export default HTMLIngredient;

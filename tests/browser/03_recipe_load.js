@@ -187,6 +187,27 @@ module.exports = {
         });
     },
 
+    "Recipe projection restores argument selector visibility": browser => {
+        browser.execute(() => {
+            const app = window.app;
+            app.manager.controls.setAutoBake(false);
+            app.setRecipeConfig([{op: "SHA2", args: ["256", 64, 160]}]);
+
+            const groups = document.querySelectorAll(
+                "#rec-list .operation .ingredients .form-group"
+            );
+            return {
+                selectedSize: document.querySelector("#rec-list .arg-selector").value,
+                sha256RoundsVisible: !groups[1].classList.contains("d-none"),
+                sha512RoundsHidden: groups[2].classList.contains("d-none"),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.selectedSize, "256");
+            browser.assert.strictEqual(value.sha256RoundsVisible, true);
+            browser.assert.strictEqual(value.sha512RoundsHidden, true);
+        });
+    },
+
     "Agent Recipe transaction publishes once without Auto Bake": browser => {
         browser.execute(() => {
             const app = window.app,

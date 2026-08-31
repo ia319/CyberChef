@@ -1,5 +1,8 @@
 import HTMLOperation from "../HTMLOperation.mjs";
-import {RECIPE_INGREDIENT_HANDLER_GROUP} from "../HTMLIngredient.mjs";
+import {
+    applyArgSelectorVisibility,
+    RECIPE_INGREDIENT_HANDLER_GROUP,
+} from "../HTMLIngredient.mjs";
 
 
 /**
@@ -174,6 +177,9 @@ class RecipeDOMProjection {
             element.innerHTML = operation.toFullHtml();
             if (operationConfig.flowControl) element.classList.add("flow-control-op");
             applyOperationConfig(element, step.operation);
+            for (const selector of element.querySelectorAll(".arg-selector")) {
+                applyArgSelectorVisibility(selector);
+            }
             restoreViewState(element, viewState.get(step.stepId));
             fragment.appendChild(element);
         }
