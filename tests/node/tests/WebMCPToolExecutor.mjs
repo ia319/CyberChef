@@ -64,6 +64,34 @@ TestRegister.addApiTests([
         assert.equal(result.error.code, TOOL_ERROR_CODE.STALE_RECIPE);
     }),
 
+    it("WebMCPToolExecutor: should preserve reviewed terminal Bake context", async () => {
+        const state = {
+                sessionEpoch: 3,
+                recipeRevision: 4,
+                executionCapability: "AGENT_BAKE_AVAILABLE",
+                inputTabId: 1,
+                inputGeneration: "2:1",
+                inputRevision: 5,
+                executionOptionsVersion: 1,
+                viewVersion: 6,
+                outputTabId: 1,
+                outputGeneration: 7,
+                outputVersion: 8,
+                bakeId: 9,
+                terminalState: "failed",
+            },
+            result = await executeTool(CONTRACT, async () => {
+                throw new ToolExecutionError(TOOL_ERROR_CODE.BAKE_FAILED, {
+                    stepId: "recipe-step-2",
+                    state,
+                });
+            }, {query: "base64"});
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.BAKE_FAILED);
+        assert.equal(result.error.stepId, "recipe-step-2");
+        assert.deepStrictEqual(result.state, state);
+    }),
+
     it("WebMCPToolExecutor: should contain an unrecognized expected error code", async () => {
         const result = await executeTool(CONTRACT, async () => {
             throw new ToolExecutionError("SECRET_CANARY");

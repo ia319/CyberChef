@@ -1,3 +1,4 @@
+import {isBakeErrorContext} from "./BakeResultContext.mjs";
 import { copyJsonValue } from "./JsonValue.mjs";
 
 const TOOL_RESULT_VERSION = "1";
@@ -78,24 +79,34 @@ const ERROR_DEFINITIONS = Object.freeze({
  * Builds a fixed error result without accepting dynamic error text.
  *
  * @param {string} code - Error code from TOOL_ERROR_CODE.
+ * @param {Object|undefined} [context] - Reviewed terminal Bake context.
  * @returns {Object} A JSON-safe error envelope.
  */
-function buildErrorResult(code) {
-    const definition = Object.prototype.hasOwnProperty.call(ERROR_DEFINITIONS, code) ?
-        ERROR_DEFINITIONS[code] : ERROR_DEFINITIONS[TOOL_ERROR_CODE.INTERNAL_ERROR];
-    const safeCode = Object.prototype.hasOwnProperty.call(ERROR_DEFINITIONS, code) ?
+function buildErrorResult(code, context) {
+    let safeCode = Object.prototype.hasOwnProperty.call(ERROR_DEFINITIONS, code) ?
         code : TOOL_ERROR_CODE.INTERNAL_ERROR;
 
-    return {
-        version: TOOL_RESULT_VERSION,
-        ok: false,
-        error: {
-            code: safeCode,
-            message: definition.message,
-            retryable: definition.retryable,
-            userActionRequired: definition.userActionRequired,
-        },
-    };
+    if (typeof context !== "undefined" && !isBakeErrorContext(safeCode, context)) {
+        safeCode = TOOL_ERROR_CODE.INTERNAL_ERROR;
+        return buildErrorResult(safeCode);
+    }
+
+    const definition = ERROR_DEFINITIONS[safeCode],
+        result = {
+            version: TOOL_RESULT_VERSION,
+            ok: false,
+            error: {
+                code: safeCode,
+                message: definition.message,
+                retryable: definition.retryable,
+                userActionRequired: definition.userActionRequired,
+            },
+        };
+    if (typeof context !== "undefined") {
+        if (context.stepId !== null) result.error.stepId = context.stepId;
+        result.state = context.state;
+    }
+    return result;
 }
 
 
@@ -170,10 +181,11 @@ function isSuccessResultWithinBudget(data, state) {
  * Creates an error result from the fixed error catalog.
  *
  * @param {string} code - Error code from TOOL_ERROR_CODE.
+ * @param {Object|undefined} [context] - Optional reviewed terminal Bake context.
  * @returns {Object} A JSON-safe error envelope.
  */
-function createErrorResult(code) {
-    return buildErrorResult(code);
+function createErrorResult(code, context) {
+    return finalizeToolResult(buildErrorResult(code, context));
 }
 
 export {

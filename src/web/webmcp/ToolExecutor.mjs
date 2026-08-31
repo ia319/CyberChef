@@ -13,15 +13,17 @@ import {
 class ToolExecutionError extends Error {
 
     /**
-     * Preserves only a reviewed public error code.
+     * Preserves a reviewed public error code and optional terminal Bake context.
      *
      * @param {string} code - Error code from TOOL_ERROR_CODE.
+     * @param {Object|undefined} [context] - Reviewed terminal Bake context.
      */
-    constructor(code) {
+    constructor(code, context) {
         super("WebMCP tool execution failed");
         this.name = "ToolExecutionError";
         this.code = Object.prototype.hasOwnProperty.call(ERROR_DEFINITIONS, code) ?
             code : TOOL_ERROR_CODE.INTERNAL_ERROR;
+        this.context = context;
     }
 }
 
@@ -55,7 +57,7 @@ async function executeTool(contract, handler, input, options) {
         return createSuccessResult(handlerResult.data, handlerResult.state);
     } catch (err) {
         if (signal && signal.aborted) throw signal.reason;
-        if (err instanceof ToolExecutionError) return createErrorResult(err.code);
+        if (err instanceof ToolExecutionError) return createErrorResult(err.code, err.context);
         return createErrorResult(TOOL_ERROR_CODE.INTERNAL_ERROR);
     }
 }

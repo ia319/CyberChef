@@ -51,6 +51,40 @@ TestRegister.addApiTests([
         assert.equal(JSON.stringify(result).includes("SECRET_CANARY"), false);
     }),
 
+    it("WebMCPToolResult: should allow only reviewed terminal Bake context", () => {
+        const state = {
+                sessionEpoch: 3,
+                recipeRevision: 4,
+                executionCapability: "AGENT_BAKE_AVAILABLE",
+                inputTabId: 1,
+                inputGeneration: "2:1",
+                inputRevision: 5,
+                executionOptionsVersion: 1,
+                viewVersion: 6,
+                outputTabId: 1,
+                outputGeneration: 7,
+                outputVersion: 8,
+                bakeId: 9,
+                terminalState: "paused",
+            },
+            result = createErrorResult(TOOL_ERROR_CODE.BAKE_PAUSED, {
+                stepId: "recipe-step-2",
+                state,
+            });
+
+        state.bakeId = 10;
+        assert.equal(result.error.code, TOOL_ERROR_CODE.BAKE_PAUSED);
+        assert.equal(result.error.stepId, "recipe-step-2");
+        assert.equal(result.state.bakeId, 9);
+
+        const unsafe = createErrorResult(TOOL_ERROR_CODE.BAKE_FAILED, {
+            stepId: null,
+            state: {...state, rawOutput: "SECRET_CANARY"},
+        });
+        assert.equal(unsafe.error.code, TOOL_ERROR_CODE.INTERNAL_ERROR);
+        assert.equal(JSON.stringify(unsafe).includes("SECRET_CANARY"), false);
+    }),
+
     it("WebMCPToolResult: should reject values that JSON would alter or omit", () => {
         const cycle = {};
         cycle.self = cycle;
