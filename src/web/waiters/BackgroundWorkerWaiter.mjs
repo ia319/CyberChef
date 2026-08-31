@@ -5,6 +5,7 @@
  */
 
 import ChefWorker from "worker-loader?inline=no-fallback!../../core/ChefWorker.js";
+import {RUN_STATE} from "../run/RunCoordinator.mjs";
 
 /**
  * Waiter to handle conversations with a ChefWorker in the background.
@@ -21,9 +22,10 @@ class BackgroundWorkerWaiter {
         this.app = app;
         this.manager = manager;
 
-        this.callbacks = {};
+        this.callbacks = new Map();
+        this.magicProvenance = new Map();
         this.callbackID = 0;
-        this.completedCallback = -1;
+        this.activeMagicId = null;
         this.timeout = null;
     }
 
@@ -60,17 +62,25 @@ class BackgroundWorkerWaiter {
      */
     handleChefMessage(e) {
         const r = e.data;
+        if (!r || typeof r.action !== "string") return;
         log.debug(`Receiving '${r.action}' from BGChefWorker`);
 
         switch (r.action) {
             case "bakeComplete":
-            case "bakeError":
-                if (typeof r.data.id !== "undefined") {
-                    clearTimeout(this.timeout);
-                    this.callbacks[r.data.id].bind(this)(r.data);
-                    this.completedCallback = r.data.id;
+            case "bakeError": {
+                const id = r.data?.id,
+                    callback = this.callbacks.get(id);
+                if (callback) {
+                    this.callbacks.delete(id);
+                    if (this.activeMagicId === id) {
+                        clearTimeout(this.timeout);
+                        this.activeMagicId = null;
+                        this.timeout = null;
+                    }
+                    callback.call(this, r.data, id);
                 }
                 break;
+            }
             case "workerLoaded":
                 log.debug("Background ChefWorker loaded");
                 break;
@@ -88,8 +98,18 @@ class BackgroundWorkerWaiter {
 
     /**
      * Cancels the current bake by terminating the ChefWorker and creating a new one.
+     *
+     * @param {number|null} [id=null] - Request identity when cancellation came from a timer.
      */
-    cancelBake() {
+    cancelBake(id=null) {
+        if (id !== null && id !== this.activeMagicId) return;
+        clearTimeout(this.timeout);
+        this.timeout = null;
+        if (this.activeMagicId !== null) {
+            this.callbacks.delete(this.activeMagicId);
+            this.magicProvenance.delete(this.activeMagicId);
+            this.activeMagicId = null;
+        }
         if (this.chefWorker)
             this.chefWorker.terminate();
         this.registerChefWorker();
@@ -106,24 +126,31 @@ class BackgroundWorkerWaiter {
      * @param {boolean} step
      * @param {Function} callback
      * @param {number|null} [recipeRevisionAtStart=null] - Recipe revision associated with the task.
+     * @returns {number} Background request identity.
      */
     bake(input, recipeConfig, options, progress, step, callback, recipeRevisionAtStart=null) {
         const id = this.callbackID++;
-        this.callbacks[id] = callback;
+        this.callbacks.set(id, callback);
 
-        this.chefWorker.postMessage({
-            action: "bake",
-            data: {
-                input: input,
-                recipeConfig: recipeConfig,
-                options: options,
-                progress: progress,
-                step: step,
-                id: id,
-                bakeId: id,
-                recipeRevisionAtStart: recipeRevisionAtStart,
-            }
-        });
+        try {
+            this.chefWorker.postMessage({
+                action: "bake",
+                data: {
+                    input: input,
+                    recipeConfig: recipeConfig,
+                    options: options,
+                    progress: progress,
+                    step: step,
+                    id: id,
+                    bakeId: id,
+                    recipeRevisionAtStart: recipeRevisionAtStart,
+                }
+            });
+        } catch (err) {
+            this.callbacks.delete(id);
+            throw err;
+        }
+        return id;
     }
 
 
@@ -131,24 +158,25 @@ class BackgroundWorkerWaiter {
      * Asks the Magic operation what it can do with the input data.
      *
      * @param {string|ArrayBuffer} input
-     * @param {number} recipeRevisionAtStart - Recipe revision that produced the sample.
+     * @param {Object} provenance - Fresh Output provenance that produced the sample.
      */
-    magic(input, recipeRevisionAtStart) {
-        // If we're still working on the previous bake, cancel it before starting a new one.
-        if (this.completedCallback + 1 < this.callbackID) {
-            clearTimeout(this.timeout);
-            this.cancelBake();
-        }
+    magic(input, provenance) {
+        if (!provenance || provenance.terminalState !== RUN_STATE.COMPLETED) return;
 
-        this.bake(input, [
+        // If we're still working on the previous bake, cancel it before starting a new one.
+        if (this.activeMagicId !== null) this.cancelBake(this.activeMagicId);
+
+        const id = this.bake(input, [
             {
                 "op": "Magic",
                 "args": [3, false, false]
             }
-        ], {}, 0, false, this.magicComplete, recipeRevisionAtStart);
+        ], {}, 0, false, this.magicComplete, provenance.recipeRevision);
+        this.magicProvenance.set(id, provenance);
+        this.activeMagicId = id;
 
         // Cancel this bake if it takes too long.
-        this.timeout = setTimeout(this.cancelBake.bind(this), 3000);
+        this.timeout = setTimeout(() => this.cancelBake(id), 3000);
     }
 
 
@@ -156,13 +184,16 @@ class BackgroundWorkerWaiter {
      * Handler for completed Magic bakes.
      *
      * @param {Object} response
+     * @param {number} id - Background request identity.
      */
-    magicComplete(response) {
+    magicComplete(response, id) {
         log.debug("--- Background Magic Bake complete ---");
-        if (!response || response.error ||
-            response.recipeRevisionAtStart !== this.manager.recipe.getRecipeRevision()) return;
+        const provenance = this.magicProvenance.get(id);
+        this.magicProvenance.delete(id);
+        if (!provenance || !response || response.error ||
+            response.recipeRevisionAtStart !== provenance.recipeRevision) return;
 
-        this.manager.output.backgroundMagicResult(response.dish.value);
+        this.manager.output.backgroundMagicResult(response.dish.value, provenance);
     }
 
 

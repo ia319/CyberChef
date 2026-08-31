@@ -1026,6 +1026,7 @@ class InputWaiter {
      * @fires Manager#statechange
      */
     inputChange(e) {
+        this.manager.output.hideMagicButton();
         // Change debounce delay based on input length
         const inputLength = this.inputEditorView.state.doc.length;
         let delay;

@@ -605,6 +605,100 @@ module.exports = {
         });
     },
 
+    "Background Magic stays bound to a fresh Output": browser => {
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager,
+                outputWaiter = manager.output,
+                inputNum = manager.tabs.getActiveTab("output"),
+                output = outputWaiter.outputs[inputNum],
+                suggestion = [{
+                    recipe: [{op: "To Hex", args: ["Space", 0]}],
+                    data: "suggested output",
+                }],
+                bindOutput = state => {
+                    const target = manager.worker.captureWorkspaceTarget({
+                            nums: [inputNum],
+                            inputStates: [manager.input.getSynchronizedInputState(inputNum)],
+                            source: "manual",
+                            progress: 0,
+                            step: false,
+                        }),
+                        request = manager.runs.ensure(target, {
+                            owner: "user",
+                            mode: "manual",
+                            reuseFresh: false,
+                        }),
+                        outcome = {state};
+                    outputWaiter.bindRunTarget(request.run.target);
+                    outputWaiter.settleRunTarget(request.run.target, inputNum, outcome);
+                    manager.runs.settleInput(request.run.bakeId, inputNum, outcome);
+                    output.status = state === "completed" ? "baked" : "stale";
+                    return output.provenance;
+                },
+                originalGetDishBuffer = outputWaiter.getDishBuffer,
+                originalMagic = manager.background.magic,
+                originalAutoMagic = app.options.autoMagic;
+
+            const firstProvenance = bindOutput("completed");
+            output.data = {dish: {}};
+            let dispatchedProvenance = null;
+            outputWaiter.getDishBuffer = async () => new Uint8Array([65]).buffer;
+            manager.background.magic = (sample, provenance) => {
+                dispatchedProvenance = provenance;
+            };
+            app.options.autoMagic = true;
+            await outputWaiter.backgroundMagic();
+            outputWaiter.getDishBuffer = originalGetDishBuffer;
+            manager.background.magic = originalMagic;
+            app.options.autoMagic = originalAutoMagic;
+
+            outputWaiter.backgroundMagicResult(suggestion, firstProvenance);
+            const currentResultVisible = !document.getElementById("magic").classList.contains("hidden");
+            outputWaiter.hideMagicButton();
+            manager.background.magic(
+                new TextEncoder().encode("dGVzdA==").buffer,
+                firstProvenance
+            );
+            const deadline = Date.now() + 2500;
+            while (document.getElementById("magic").classList.contains("hidden") &&
+                Date.now() < deadline) {
+                await new Promise(resolve => setTimeout(resolve, 25));
+            }
+            const workerResultVisible = !document.getElementById("magic").classList.contains("hidden"),
+                workerRequestSettled = manager.background.activeMagicId === null &&
+                    manager.background.callbacks.size === 0 &&
+                    manager.background.magicProvenance.size === 0 &&
+                    manager.background.timeout === null,
+                secondProvenance = bindOutput("completed");
+            outputWaiter.hideMagicButton();
+            outputWaiter.backgroundMagicResult(suggestion, firstProvenance);
+            const staleResultVisible = !document.getElementById("magic").classList.contains("hidden");
+
+            outputWaiter.backgroundMagicResult(suggestion, secondProvenance);
+            const recipeBeforeStaleClick = JSON.stringify(app.getRecipeConfig());
+            bindOutput("superseded");
+            outputWaiter.magicClick();
+            done({
+                dispatchBound: dispatchedProvenance === firstProvenance,
+                currentResultVisible,
+                workerResultVisible,
+                workerRequestSettled,
+                staleResultVisible,
+                staleClickChangedRecipe: JSON.stringify(app.getRecipeConfig()) !== recipeBeforeStaleClick,
+                magicHiddenAfterStaleClick: document.getElementById("magic").classList.contains("hidden"),
+            });
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.dispatchBound, true);
+            browser.assert.strictEqual(value.currentResultVisible, true);
+            browser.assert.strictEqual(value.workerResultVisible, true);
+            browser.assert.strictEqual(value.workerRequestSettled, true);
+            browser.assert.strictEqual(value.staleResultVisible, false);
+            browser.assert.strictEqual(value.staleClickChangedRecipe, false);
+            browser.assert.strictEqual(value.magicHiddenAfterStaleClick, true);
+        });
+    },
+
     "Silent Bake reaches its terminal state": browser => {
         browser.execute(() => {
             const app = window.app,

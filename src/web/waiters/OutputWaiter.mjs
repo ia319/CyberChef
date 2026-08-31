@@ -77,6 +77,7 @@ class OutputWaiter {
         this.appendBombeTimeout = null;
         this.showOutputLoaderTimeout = null;
         this.removeBombeTimeout = null;
+        this.magicButtonProvenance = null;
         this.initEditor();
 
         this.outputs = {};
@@ -668,6 +669,20 @@ class OutputWaiter {
     }
 
     /**
+     * Checks whether provenance still identifies the fresh visible Output.
+     *
+     * @param {Object|null} provenance - Immutable Output provenance.
+     * @returns {boolean} Whether UI derived from the Output may still be shown or applied.
+     */
+    isCurrentOutputProvenance(provenance) {
+        const outputTabId = provenance?.outputTabId;
+        return Number.isSafeInteger(outputTabId) &&
+            this.manager.tabs.getActiveTab("output") === outputTabId &&
+            this.outputs[outputTabId]?.provenance === provenance &&
+            this.outputIsFresh(outputTabId);
+    }
+
+    /**
      * Calculates the next result identity owned by one Output record.
      *
      * @param {Object} output - Mutable Output record.
@@ -796,6 +811,9 @@ class OutputWaiter {
     updateOutputStatus(status, inputNum, target=null) {
         if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].status = status;
+        if (inputNum === this.manager.tabs.getActiveTab("output") && status !== "baked") {
+            this.hideMagicButton();
+        }
 
         if (status !== "error") {
             delete this.outputs[inputNum].error;
@@ -827,16 +845,20 @@ class OutputWaiter {
      */
     markRunTargetStale(target) {
         if (!target?.inputTargets) return;
-        let changed = false;
+        const activeOutputTabId = this.manager.tabs.getActiveTab("output");
+        let changed = false,
+            activeOutputChanged = false;
         for (const inputTarget of target.inputTargets) {
             const output = this.outputs[inputTarget.outputTabId];
             if (!output || output.outputGeneration !== inputTarget.outputGeneration) continue;
             output.status = "stale";
             this.displayTabInfo(inputTarget.outputTabId);
             changed = true;
+            if (inputTarget.outputTabId === activeOutputTabId) activeOutputChanged = true;
         }
         if (changed) {
             this.outputRenderGeneration++;
+            if (activeOutputChanged) this.hideMagicButton();
             this.manager.controls.showStaleIndicator();
         }
     }
@@ -1637,20 +1659,16 @@ class OutputWaiter {
         this.hideMagicButton();
         const inputNum = this.manager.tabs.getActiveTab("output"),
             output = this.outputs[inputNum],
+            provenance = output?.provenance,
             dish = this.getOutputDish(inputNum);
-        if (!this.app.options.autoMagic || dish === null || output?.status !== "baked" ||
-            output.recipeRevision !== this.manager.recipe.getRecipeRevision()) return;
-        const bakeId = output.bakeId,
-            recipeRevision = output.recipeRevision;
+        if (!this.app.options.autoMagic || dish === null ||
+            !this.isCurrentOutputProvenance(provenance)) return;
         const buffer = await this.getDishBuffer(dish);
-        if (this.manager.tabs.getActiveTab("output") !== inputNum || this.outputs[inputNum] !== output ||
-            output.status !== "baked" || output.bakeId !== bakeId ||
-            output.recipeRevision !== recipeRevision ||
-            recipeRevision !== this.manager.recipe.getRecipeRevision()) return;
+        if (!this.isCurrentOutputProvenance(provenance)) return;
         const sample = buffer.slice(0, 1000) || "";
 
         if (sample.length || sample.byteLength) {
-            this.manager.background.magic(sample, recipeRevision);
+            this.manager.background.magic(sample, provenance);
         }
     }
 
@@ -1658,9 +1676,11 @@ class OutputWaiter {
      * Handles the results of a background Magic call.
      *
      * @param {Object[]} options
+     * @param {Object} provenance - Output provenance used for the analysis.
      */
-    backgroundMagicResult(options) {
-        if (!options.length) return;
+    backgroundMagicResult(options, provenance) {
+        if (!Array.isArray(options) || !options.length ||
+            !this.isCurrentOutputProvenance(provenance)) return;
 
         const currentRecipeConfig = this.app.getRecipeConfig();
         let msg = "",
@@ -1678,7 +1698,7 @@ class OutputWaiter {
             return;
         }
 
-        this.showMagicButton(msg, newRecipeConfig);
+        this.showMagicButton(msg, newRecipeConfig, provenance);
     }
 
     /**
@@ -1690,6 +1710,10 @@ class OutputWaiter {
      */
     magicClick() {
         const magicButton = document.getElementById("magic");
+        if (!this.isCurrentOutputProvenance(this.magicButtonProvenance)) {
+            this.hideMagicButton();
+            return;
+        }
         this.app.setRecipeConfig(
             JSON.parse(magicButton.getAttribute("data-recipe")),
             RECIPE_TRANSACTION_SOURCE.MAGIC
@@ -1702,9 +1726,12 @@ class OutputWaiter {
      *
      * @param {string} msg
      * @param {Object[]} recipeConfig
+     * @param {Object} provenance - Output provenance used to create the suggestion.
      */
-    showMagicButton(msg, recipeConfig) {
+    showMagicButton(msg, recipeConfig, provenance) {
+        if (!this.isCurrentOutputProvenance(provenance)) return;
         const magicButton = document.getElementById("magic");
+        this.magicButtonProvenance = provenance;
         magicButton.setAttribute("data-original-title", msg);
         magicButton.setAttribute("data-recipe", JSON.stringify(recipeConfig), null, "");
         magicButton.classList.remove("hidden");
@@ -1717,6 +1744,7 @@ class OutputWaiter {
      */
     hideMagicButton() {
         const magicButton = document.getElementById("magic");
+        this.magicButtonProvenance = null;
         magicButton.classList.add("hidden");
         magicButton.classList.remove("pulse");
         magicButton.setAttribute("data-recipe", "");
