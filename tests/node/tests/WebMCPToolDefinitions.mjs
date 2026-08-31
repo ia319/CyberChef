@@ -161,13 +161,23 @@ TestRegister.addApiTests([
         assertDeeplyFrozen(BUILD_PROFILES);
     }),
 
-    it("WebMCPToolDefinitions: should expose the complete Recipe collaboration capability", () => {
-        assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.RECIPE);
-        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, FORMAL_TOOL_NAMES.slice(0, 4));
+    it("WebMCPToolDefinitions: should expose the candidate Run capability", () => {
+        assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.RUN);
+        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, FORMAL_TOOL_NAMES.slice(0, 5));
         assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.stateFields, [
             "sessionEpoch",
             "recipeRevision",
             "executionCapability",
+            "inputTabId",
+            "inputGeneration",
+            "inputRevision",
+            "executionOptionsVersion",
+            "viewVersion",
+            "outputTabId",
+            "outputGeneration",
+            "outputVersion",
+            "bakeId",
+            "terminalState",
         ]);
     }),
 

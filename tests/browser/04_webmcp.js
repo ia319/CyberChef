@@ -46,12 +46,13 @@ module.exports = {
             browser.assert.strictEqual(value.getToolsAvailable, true);
             browser.assert.strictEqual(value.executeToolAvailable, true);
             browser.assert.strictEqual(value.panelHidden, false);
-            browser.assert.strictEqual(value.profileName, "recipe");
+            browser.assert.strictEqual(value.profileName, "run");
             browser.assert.deepStrictEqual(value.toolNames, [
                 "search_operations",
                 "get_operation_details",
                 "get_recipe_state",
                 "apply_recipe_patch",
+                "bake_recipe",
             ]);
             initialSessionState = value;
         });
@@ -59,7 +60,8 @@ module.exports = {
         browser.expect.element("#webmcp-collaboration").to.be.visible;
         browser.expect.element("#webmcp-heading").text.to.equal("WebMCP Recipe access");
         browser.expect.element("#webmcp-tool-list").text.to.contain("apply_recipe_patch");
-        browser.expect.element("#webmcp-profile-summary").text.to.contain("user runs Bake");
+        browser.expect.element("#webmcp-tool-list").text.to.contain("bake_recipe");
+        browser.expect.element("#webmcp-profile-summary").text.to.contain("request a run");
         browser.expect.element("#webmcp-start").attribute("aria-label")
             .to.equal("Start WebMCP Recipe access");
         browser.expect.element("#webmcp-revert").attribute("aria-describedby")
@@ -122,6 +124,7 @@ module.exports = {
             browser.assert.strictEqual(value.scriptError, undefined);
             browser.assert.deepStrictEqual(value.names, [
                 "apply_recipe_patch",
+                "bake_recipe",
                 "get_operation_details",
                 "get_recipe_state",
                 "search_operations",
@@ -139,38 +142,80 @@ module.exports = {
 
         browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
         browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager,
+                inputCanary = "SECRET_INPUT_CANARY",
+                outputCanary = "U0VDUkVUX0lOUFVUX0NBTkFSWQ==";
             try {
-                window.app.setRecipeConfig([]);
+                manager.controls.setAutoBake(false);
+                app.setRecipeConfig([]);
+                const inputView = manager.input.inputEditorView;
+                inputView.dispatch({
+                    changes: {
+                        from: 0,
+                        to: inputView.state.doc.length,
+                        insert: inputCanary,
+                    },
+                });
+                await manager.input.flushActiveInputForBake();
+                manager.controls.setAutoBake(true);
+
                 const tools = await document.modelContext.getTools(),
                     stateTool = tools.find(tool => tool.name === "get_recipe_state"),
                     patchTool = tools.find(tool => tool.name === "apply_recipe_patch"),
+                    bakeTool = tools.find(tool => tool.name === "bake_recipe"),
                     state = await window.__invokeWebMCPTool(stateTool, {}),
-                    bakeIdBefore = window.app.manager.worker.bakeId,
+                    bakeIdBefore = manager.worker.bakeId,
                     patch = await window.__invokeWebMCPTool(patchTool, {
                         expectedRevision: state.state.recipeRevision,
                         changes: [{type: "insert", operation: "To Base64"}],
-                    });
+                    }),
+                    bakeIdAfterPatch = manager.worker.bakeId,
+                    bake = await window.__invokeWebMCPTool(bakeTool, {
+                        expectedRevision: patch.state.recipeRevision,
+                    }),
+                    outputNum = manager.tabs.getActiveTab("output");
 
-                window.__webmcpBakeIdBefore = bakeIdBefore;
                 done({
                     state,
                     patch,
+                    bake,
                     bakeIdBefore,
-                    bakeIdAfterPatch: window.app.manager.worker.bakeId,
-                    config: window.app.manager.recipe.getConfig(),
+                    bakeIdAfterPatch,
+                    bakeIdAfterTool: manager.worker.bakeId,
+                    outputFresh: manager.output.outputIsFresh(outputNum),
+                    outputText: manager.output.outputEditorView.state.doc.toString(),
+                    config: manager.recipe.getConfig(),
                     panelText: document.getElementById("webmcp-collaboration").textContent,
+                    bakeContainsInput: JSON.stringify(bake).includes(inputCanary),
+                    bakeContainsOutput: JSON.stringify(bake).includes(outputCanary),
                 });
             } catch (err) {
                 done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                manager.controls.setAutoBake(false);
             }
         }, [], ({value}) => {
             browser.assert.strictEqual(value.scriptError, undefined);
             browser.assert.strictEqual(value.state.ok, true);
-            browser.assert.strictEqual(value.state.state.executionCapability, "USER_BAKE_REQUIRED");
+            browser.assert.strictEqual(value.state.state.executionCapability, "AGENT_BAKE_AVAILABLE");
+            browser.assert.strictEqual(value.state.state.inputTabId, value.state.state.outputTabId);
             browser.assert.strictEqual(value.patch.ok, true);
             browser.assert.strictEqual(value.patch.data.status, "committed");
             browser.assert.strictEqual(value.patch.data.insertedSteps.stepIds.length, 1);
-            browser.assert.strictEqual(value.bakeIdAfterPatch, value.bakeIdBefore);
+            browser.assert.strictEqual(value.bakeIdAfterPatch, value.bakeIdBefore + 1);
+            browser.assert.strictEqual(value.bake.ok, true);
+            browser.assert.strictEqual(
+                ["joined", "alreadyFresh"].includes(value.bake.data.decision),
+                true
+            );
+            browser.assert.strictEqual(value.bake.state.terminalState, "completed");
+            browser.assert.strictEqual(value.bake.state.bakeId, value.bakeIdAfterPatch);
+            browser.assert.strictEqual(value.bakeIdAfterTool, value.bakeIdAfterPatch);
+            browser.assert.strictEqual(value.outputFresh, true);
+            browser.assert.strictEqual(value.outputText, "U0VDUkVUX0lOUFVUX0NBTkFSWQ==");
+            browser.assert.strictEqual(value.bakeContainsInput, false);
+            browser.assert.strictEqual(value.bakeContainsOutput, false);
             browser.assert.strictEqual(value.config.length, 1);
             browser.assert.strictEqual(JSON.stringify(value.patch).includes("A-Za-z0-9+/="), false);
             browser.assert.strictEqual(value.panelText.includes("A-Za-z0-9+/="), false);
@@ -182,13 +227,6 @@ module.exports = {
         browser.expect.element(".webmcp-step-badge").to.be.visible;
         browser.expect.element(".webmcp-step-badge").text.to.equal("WebMCP change");
         browser.expect.element("#webmcp-revert").to.be.enabled;
-
-        browser.click("#bake").pause(100).execute(() => ({
-            bakeIdBefore: window.__webmcpBakeIdBefore,
-            bakeIdAfter: window.app.manager.worker.bakeId,
-        }), [], ({value}) => {
-            browser.assert.strictEqual(value.bakeIdAfter > value.bakeIdBefore, true);
-        });
 
         browser.sendKeys("#webmcp-revert", browser.Keys.ENTER);
         browser.expect.element("#webmcp-revert").to.not.be.enabled;
