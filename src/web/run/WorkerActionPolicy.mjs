@@ -15,6 +15,7 @@ const WORKER_ACTION = Object.freeze({
     PROGRESS_MESSAGE: "progressMessage",
     SET_REGISTERS: "setRegisters",
     SILENT_BAKE_COMPLETE: "silentBakeComplete",
+    SILENT_BAKE_ERROR: "silentBakeError",
     STATUS_MESSAGE: "statusMessage",
     WORKER_LOADED: "workerLoaded",
 });
@@ -43,6 +44,11 @@ const WORKER_ACTION_POLICY = Object.freeze({
         terminal: true,
     }),
     [WORKER_ACTION.SILENT_BAKE_COMPLETE]: Object.freeze({
+        scope: WORKER_ACTION_SCOPE.SILENT_RUN,
+        requiresCurrentRecipe: false,
+        terminal: true,
+    }),
+    [WORKER_ACTION.SILENT_BAKE_ERROR]: Object.freeze({
         scope: WORKER_ACTION_SCOPE.SILENT_RUN,
         requiresCurrentRecipe: false,
         terminal: true,

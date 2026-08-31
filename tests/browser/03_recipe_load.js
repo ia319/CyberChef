@@ -1005,6 +1005,42 @@ module.exports = {
         });
     },
 
+    "Silent Bake failure releases its Worker": browser => {
+        browser.execute(() => {
+            const manager = window.app.manager,
+                worker = manager.worker;
+            worker.silentBake([{op: "Sleep", args: [500]}]);
+            const workerState = worker.chefWorkers.find(item => item.silentTarget),
+                target = workerState?.silentTarget;
+            if (!workerState || !target) return {setupFailed: true};
+
+            worker.handleChefMessage({
+                data: {
+                    action: "silentBakeError",
+                    data: {
+                        silentBakeId: target.silentBakeId,
+                        bakeId: target.bakeId,
+                        recipeRevisionAtStart: target.recipeRevisionAtStart,
+                    },
+                },
+            }, workerState);
+            const run = manager.runs.getRun(target.bakeId);
+            return {
+                setupFailed: false,
+                workerRemoved: !worker.chefWorkers.includes(workerState),
+                terminalState: run?.terminalState ?? null,
+                failureKind: run?.failureKind ?? null,
+                replacementAvailable: worker.chefWorkers.some(item => !item.active),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.setupFailed, false);
+            browser.assert.strictEqual(value.workerRemoved, true);
+            browser.assert.strictEqual(value.terminalState, "failed");
+            browser.assert.strictEqual(value.failureKind, "fatal");
+            browser.assert.strictEqual(value.replacementAvailable, true);
+        });
+    },
+
     after: browser => {
         browser.end();
     }

@@ -508,6 +508,10 @@ class WorkerWaiter {
                 r.data?.bakeId !== target.bakeId ||
                 r.data?.recipeRevisionAtStart !== target.recipeRevisionAtStart ||
                 !this.manager.runs.isActive(target.bakeId)) return;
+            if (r.action === WORKER_ACTION.SILENT_BAKE_ERROR) {
+                this.handleChefWorkerFailure(workerObj, RUN_FAILURE_KIND.FATAL);
+                return;
+            }
             this.manager.runs.settle(target.bakeId, RUN_STATE.COMPLETED);
             workerObj.active = false;
             workerObj.silentTarget = null;

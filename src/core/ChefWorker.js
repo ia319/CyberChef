@@ -137,17 +137,28 @@ async function bake(data) {
  * Silent baking handler
  */
 async function silentBake(data) {
-    const duration = await self.chef.silentBake(data.recipeConfig);
+    try {
+        const duration = await self.chef.silentBake(data.recipeConfig);
 
-    self.postMessage({
-        action: "silentBakeComplete",
-        data: {
-            duration: duration,
-            silentBakeId: data.silentBakeId,
-            bakeId: data.bakeId,
-            recipeRevisionAtStart: data.recipeRevisionAtStart,
-        }
-    });
+        self.postMessage({
+            action: "silentBakeComplete",
+            data: {
+                duration: duration,
+                silentBakeId: data.silentBakeId,
+                bakeId: data.bakeId,
+                recipeRevisionAtStart: data.recipeRevisionAtStart,
+            }
+        });
+    } catch {
+        self.postMessage({
+            action: "silentBakeError",
+            data: {
+                silentBakeId: data.silentBakeId,
+                bakeId: data.bakeId,
+                recipeRevisionAtStart: data.recipeRevisionAtStart,
+            }
+        });
+    }
 }
 
 

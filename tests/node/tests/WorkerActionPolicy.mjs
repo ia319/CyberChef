@@ -44,6 +44,11 @@ TestRegister.addApiTests([
         assert.equal(getWorkerActionPolicy(WORKER_ACTION.SILENT_BAKE_COMPLETE).requiresCurrentRecipe,
             false);
         assert.equal(getWorkerActionPolicy(WORKER_ACTION.SILENT_BAKE_COMPLETE).terminal, true);
+        assert.equal(getWorkerActionPolicy(WORKER_ACTION.SILENT_BAKE_ERROR).scope,
+            WORKER_ACTION_SCOPE.SILENT_RUN);
+        assert.equal(getWorkerActionPolicy(WORKER_ACTION.SILENT_BAKE_ERROR).requiresCurrentRecipe,
+            false);
+        assert.equal(getWorkerActionPolicy(WORKER_ACTION.SILENT_BAKE_ERROR).terminal, true);
         assert.equal(getWorkerActionPolicy(WORKER_ACTION.WORKER_LOADED).scope,
             WORKER_ACTION_SCOPE.LIFECYCLE);
         assert.equal(getWorkerActionPolicy(WORKER_ACTION.WORKER_LOADED).requiresCurrentRecipe, false);
