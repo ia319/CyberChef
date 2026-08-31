@@ -5,7 +5,7 @@
  */
 
 import Dish from "./Dish.mjs";
-import Recipe from "./Recipe.mjs";
+import Recipe, {RECIPE_EXECUTION_STATE} from "./Recipe.mjs";
 import log from "loglevel";
 import { isWorkerEnvironment } from "./Utils.mjs";
 
@@ -36,6 +36,7 @@ class Chef {
      * @returns {number} response.progress - The position that we have got to in the recipe
      * @returns {number} response.duration - The number of ms it took to execute the recipe
      * @returns {number} response.error - The error object thrown by a failed operation (false if no error)
+     * @returns {Object} response.execution - Final execution classification and presenter
     */
     async bake(input, recipeConfig, options={}) {
         log.debug("Chef baking");
@@ -84,7 +85,12 @@ class Chef {
             type: Dish.enumLookup(this.dish.type),
             progress: progress,
             duration: Date.now() - startTime,
-            error: error
+            error: error,
+            execution: {
+                state: recipe.getExecutionState() ?? RECIPE_EXECUTION_STATE.FATAL_FAILURE,
+                progress: progress,
+                presenter: recipe.getPresenter(),
+            },
         };
     }
 
