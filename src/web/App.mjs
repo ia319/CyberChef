@@ -821,8 +821,9 @@ class App {
      * Publishes the visible effects of one committed Agent Recipe transaction.
      *
      * @param {Object} change - Trusted structured Recipe change.
+     * @param {Object|null} [autoBakeTarget=null] - Authorized immutable Agent execution target.
      */
-    agentRecipeTransactionCommitted(change) {
+    agentRecipeTransactionCommitted(change, autoBakeTarget=null) {
         cancelDebounce("stateChange");
         this.progress = 0;
         this.stateChangeId++;
@@ -830,6 +831,7 @@ class App {
         this.manager.output.markRecipeStale();
         this.updateURL(true, null, true);
         window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+        if (autoBakeTarget) this.manager.worker.bakeAgentTarget(autoBakeTarget);
     }
 
 

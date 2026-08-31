@@ -398,6 +398,134 @@ module.exports = {
         });
     },
 
+    "Agent Auto Bake runs one safe active target": browser => {
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager,
+                recipe = manager.recipe,
+                input = manager.input,
+                inputNum = manager.tabs.getActiveTab("input"),
+                view = input.inputEditorView,
+                originalAgentAutoBakeEnabled = recipe.agentAutoBakeEnabled;
+            try {
+                manager.controls.setAutoBake(false);
+                recipe.agentAutoBakeEnabled = true;
+                app.setRecipeConfig([{
+                    op: "To Base64",
+                    args: ["A-Za-z0-9+/="],
+                }]);
+                view.dispatch({
+                    changes: {
+                        from: 0,
+                        to: view.state.doc.length,
+                        insert: "Agent Auto Bake",
+                    },
+                });
+                const synchronizedInput = await input.flushActiveInput(),
+                    before = recipe.getReadProjection(),
+                    stepId = before.steps[0].stepId,
+                    bakeIdBefore = manager.worker.bakeId;
+
+                manager.controls.setAutoBake(true);
+                const result = recipe.applyAgentPatch({
+                    expectedRevision: before.recipeRevision,
+                    changes: [{
+                        type: "setArgument",
+                        stepId,
+                        argumentIndex: 0,
+                        value: "A-Za-z0-9-_",
+                    }],
+                });
+
+                const deadline = Date.now() + 10000;
+                while (manager.output.outputs[inputNum].status !== "baked" &&
+                    Date.now() < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 20));
+                }
+                const bakeIdAfter = manager.worker.bakeId,
+                    run = manager.runs.getRun(bakeIdAfter),
+                    outputFresh = manager.output.outputIsFresh(inputNum);
+
+                manager.controls.setAutoBake(false);
+                const second = recipe.applyAgentPatch({
+                    expectedRevision: result.recipeRevision,
+                    changes: [{
+                        type: "setArgument",
+                        stepId,
+                        argumentIndex: 0,
+                        value: "A-Za-z0-9+/=",
+                    }],
+                });
+                await new Promise(resolve => setTimeout(resolve, 100));
+                const bakeIdBeforeRace = manager.worker.bakeId;
+
+                manager.controls.setAutoBake(true);
+                window.addEventListener("recipechange", () => {
+                    manager.controls.setAutoBake(false);
+                    app.setRecipeConfig([{
+                        op: "To Hex",
+                        args: ["Space", 0],
+                    }]);
+                }, {once: true});
+                const raced = recipe.applyAgentPatch({
+                    expectedRevision: second.recipeRevision,
+                    changes: [{
+                        type: "setArgument",
+                        stepId,
+                        argumentIndex: 0,
+                        value: "A-Za-z0-9-_",
+                    }],
+                });
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                done({
+                    synchronizedInput,
+                    result,
+                    second,
+                    bakeIdBefore,
+                    bakeIdAfter,
+                    bakeIdFinal: manager.worker.bakeId,
+                    run,
+                    outputFresh,
+                    outputStatus: manager.output.outputs[inputNum].status,
+                    raced,
+                    bakeIdBeforeRace,
+                    bakeIdAfterRace: manager.worker.bakeId,
+                    finalRecipe: recipe.getConfig(),
+                    finalRevision: recipe.getRecipeRevision(),
+                    targetContainsByteLength: Object.prototype.hasOwnProperty.call(
+                        run?.target?.inputTargets?.[0] ?? {},
+                        "inputByteLength"
+                    ),
+                });
+            } catch (err) {
+                done({error: err?.stack ?? err?.message ?? String(err)});
+            } finally {
+                recipe.agentAutoBakeEnabled = originalAgentAutoBakeEnabled;
+                manager.controls.setAutoBake(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.error, undefined);
+            browser.assert.strictEqual(value.synchronizedInput.inputByteLength, 15);
+            browser.assert.strictEqual(value.result.status, "committed");
+            browser.assert.strictEqual(value.bakeIdAfter, value.bakeIdBefore + 1);
+            browser.assert.strictEqual(value.run.owner, "agent");
+            browser.assert.strictEqual(value.run.mode, "agent");
+            browser.assert.strictEqual(value.run.terminalState, "completed");
+            browser.assert.strictEqual(value.run.target.recipeRevisionAtStart, value.result.recipeRevision);
+            browser.assert.strictEqual(value.run.target.inputTargets.length, 1);
+            browser.assert.strictEqual(value.outputFresh, true);
+            browser.assert.strictEqual(value.targetContainsByteLength, false);
+            browser.assert.strictEqual(value.second.status, "committed");
+            browser.assert.strictEqual(value.bakeIdFinal, value.bakeIdAfter);
+            browser.assert.strictEqual(value.outputStatus, "stale");
+            browser.assert.strictEqual(value.raced.status, "committed");
+            browser.assert.strictEqual(value.bakeIdAfterRace, value.bakeIdBeforeRace);
+            browser.assert.strictEqual(value.finalRevision, value.raced.recipeRevision + 1);
+            browser.assert.deepStrictEqual(value.finalRecipe, [{op: "To Hex", args: ["Space", 0]}]);
+        });
+    },
+
     "Recipe changes discard a running Bake result": browser => {
         browser.execute(() => {
             const app = window.app,

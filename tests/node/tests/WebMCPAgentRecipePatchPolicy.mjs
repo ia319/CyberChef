@@ -44,7 +44,7 @@ TestRegister.addApiTests([
     }),
 
     it("WebMCPAgentRecipePatchPolicy: should authorize the complete post-change Recipe", () => {
-        assert.doesNotThrow(() => authorizeAgentRecipePatch({
+        const allowed = authorizeAgentRecipePatch({
             steps: [{
                 operation: {op: "To Base64", args: ["A-Za-z0-9+/="]},
             }],
@@ -53,7 +53,22 @@ TestRegister.addApiTests([
                 type: "insert",
                 operationName: "To Base64",
             }],
-        }));
+        }, 32);
+        assert.equal(allowed.standardModificationAllowed, true);
+        assert.equal(allowed.agentBakeAllowed, true);
+
+        const resourceUnchecked = authorizeAgentRecipePatch({
+            steps: [{
+                operation: {op: "To Base64", args: ["A-Za-z0-9+/="]},
+            }],
+            actions: [{
+                commandIndex: 0,
+                type: "insert",
+                operationName: "To Base64",
+            }],
+        });
+        assert.equal(resourceUnchecked.standardModificationAllowed, true);
+        assert.equal(resourceUnchecked.agentBakeAllowed, false);
 
         assert.throws(() => authorizeAgentRecipePatch({
             steps: [{
@@ -68,7 +83,7 @@ TestRegister.addApiTests([
             error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED &&
             error.commandIndex === 0);
 
-        assert.doesNotThrow(() => authorizeAgentRecipePatch({
+        const reduced = authorizeAgentRecipePatch({
             steps: [{
                 operation: {op: "To Base64", args: ["A-Za-z0-9+/="]},
             }],
@@ -77,6 +92,20 @@ TestRegister.addApiTests([
                 type: "remove",
                 operationName: "Register",
             }],
-        }));
+        }, 32);
+        assert.equal(reduced.agentBakeAllowed, true);
+
+        const blockedExecution = authorizeAgentRecipePatch({
+            steps: [{
+                operation: {op: "Register", args: ["R0", "{0}"]},
+            }],
+            actions: [{
+                commandIndex: 0,
+                type: "remove",
+                operationName: "To Base64",
+            }],
+        }, 32);
+        assert.equal(blockedExecution.standardModificationAllowed, false);
+        assert.equal(blockedExecution.agentBakeAllowed, false);
     }),
 ]);

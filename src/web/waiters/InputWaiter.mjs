@@ -926,7 +926,7 @@ class InputWaiter {
     }
 
     /**
-     * Returns the current Worker-confirmed Input identity without reading its content.
+     * Returns the current Worker-confirmed Input identity and byte length without reading its content.
      *
      * @param {number} inputNum - Input number.
      * @returns {Promise<Object>} Immutable Input identity.
@@ -953,7 +953,7 @@ class InputWaiter {
     }
 
     /**
-     * Returns a Worker-confirmed Input identity only when no newer write is pending.
+     * Returns Worker-confirmed Input identity and resource metadata only when no newer write is pending.
      *
      * @param {number} inputNum - Input number.
      * @returns {Object|null} Immutable synchronized Input identity or null.

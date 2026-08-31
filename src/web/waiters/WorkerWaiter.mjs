@@ -15,6 +15,7 @@ import {
 } from "../run/WorkerActionPolicy.mjs";
 import {
     RUN_TARGET_ERROR_CODE,
+    RUN_TARGET_SOURCE,
     RunTargetError,
 } from "../run/RunTargetBuilder.mjs";
 import {
@@ -929,7 +930,7 @@ class WorkerWaiter {
         const request = this.manager.runs.ensure(target, {
             owner,
             mode: target.source,
-            reuseFresh: false,
+            reuseFresh: target.source === RUN_TARGET_SOURCE.AGENT,
         });
         if (request.decision !== RUN_DECISION.STARTED) return request;
 
@@ -1016,15 +1017,35 @@ class WorkerWaiter {
     }
 
     /**
+     * Starts an authorized Agent Auto Bake only while its active workspace target remains current.
+     *
+     * @param {Object} target - Immutable active Input execution target.
+     * @returns {Promise<Object>|null} Run completion or null when user state has priority.
+     */
+    bakeAgentTarget(target) {
+        if (this.app.baking || target?.source !== RUN_TARGET_SOURCE.AGENT ||
+            !this.manager.runTargets.executionIsCurrent(
+                target,
+                this.getCurrentExecutionState(target)
+            ) ||
+            !this.manager.runTargets.viewIsCurrent(target, this.manager.tabs.getViewState())) {
+            return null;
+        }
+        return this.#startBakeTarget(target);
+    }
+
+
+    /**
      * Queues a list of inputNums to be baked by ChefWorkers, and begins baking
      *
      * @param {object} inputData
      * @param {number[]} inputData.nums - The inputNums to be queued for baking
      * @param {boolean} inputData.step - If true, only execute the next operation in the recipe
      * @param {number} inputData.progress - The current progress through the recipe. Used when stepping
+     * @returns {Promise<Object>|null} Run completion or null when another visible Run owns the lane.
      */
     async bakeInputs(inputData) {
-        if (this.app.baking) return;
+        if (this.app.baking) return null;
         let target;
         try {
             target = this.captureWorkspaceTarget(inputData);
@@ -1040,17 +1061,28 @@ class WorkerWaiter {
         } catch (err) {
             this.app.handleError(err, true);
             debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["bake"])();
-            return;
+            return null;
         }
-        log.debug(`Baking input list [${inputData.nums.join(",")}]`);
+        return await this.#startBakeTarget(target);
+    }
 
-        const inputNums = inputData.nums.filter(n => n > 0);
+
+    /**
+     * Starts one validated immutable target through the shared Run coordinator.
+     *
+     * @param {Object} target - Current workspace execution target.
+     * @returns {Promise<Object>|null} Run completion or null when another visible Run owns the lane.
+     */
+    async #startBakeTarget(target) {
+        if (this.app.baking) return null;
+        const inputNums = target.inputTargets.map(inputTarget => inputTarget.inputTabId);
+        log.debug(`Baking input list [${inputNums.join(",")}]`);
 
         this.cancelBake(true, false);
 
         this.inputNums = inputNums;
         this.totalOutputs = inputNums.length;
-        this.app.progress = inputData.progress;
+        this.app.progress = target.progress;
 
         let inactiveWorkers = 0;
         for (let i = 0; i < this.chefWorkers.length; i++) {

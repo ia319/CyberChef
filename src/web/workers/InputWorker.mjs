@@ -176,7 +176,7 @@ self.createInputGeneration = function() {
 
 
 /**
- * Returns a content-free identity record for one Input.
+ * Returns identity and resource metadata for one Input without its content.
  *
  * @param {number} inputNum - Input number.
  * @returns {Object|null} Input identity or null.
@@ -188,12 +188,13 @@ self.getInputStateData = function(inputNum) {
         inputNum: parseInt(inputNum, 10),
         inputGeneration: input.inputGeneration,
         inputRevision: input.inputRevision,
+        inputByteLength: input.status === "loaded" ? input.buffer.byteLength : null,
     };
 };
 
 
 /**
- * Replies to a content-free Input identity request.
+ * Replies with Input identity and resource metadata.
  *
  * @param {Object} request - Main-thread request.
  * @returns {void}

@@ -18,6 +18,9 @@ import {
     RecipeTransaction,
     RecipeTransactionError,
 } from "../recipe/RecipeTransaction.mjs";
+import {
+    RUN_TARGET_SOURCE,
+} from "../run/RunTargetBuilder.mjs";
 
 
 /**
@@ -31,15 +34,20 @@ class RecipeWaiter {
      * @param {App} app - The main view object for CyberChef.
      * @param {Manager} manager - The CyberChef event manager.
      * @param {Object} agentPatchPolicy - Synchronous Agent patch policy.
+     * @param {boolean} agentAutoBakeEnabled - Whether the active build profile supports Agent runs.
      */
-    constructor(app, manager, agentPatchPolicy) {
+    constructor(app, manager, agentPatchPolicy, agentAutoBakeEnabled) {
         if (!agentPatchPolicy || typeof agentPatchPolicy.prepareChanges !== "function" ||
             typeof agentPatchPolicy.authorizePatch !== "function") {
             throw new TypeError("RecipeWaiter requires an Agent patch policy");
         }
+        if (typeof agentAutoBakeEnabled !== "boolean") {
+            throw new TypeError("RecipeWaiter requires an Agent execution profile");
+        }
         this.app = app;
         this.manager = manager;
         this.agentPatchPolicy = agentPatchPolicy;
+        this.agentAutoBakeEnabled = agentAutoBakeEnabled;
         this.removeIntent = false;
         this.model = new RecipeModel();
         this.modelSyncDepth = 0;
@@ -516,6 +524,26 @@ class RecipeWaiter {
 
 
     /**
+     * Captures the user-controlled state required for an Agent-triggered Auto Bake.
+     *
+     * @returns {Object|null} Exact active Input, Output, and view state or null.
+     */
+    captureAgentAutoBakeContext() {
+        if (!this.agentAutoBakeEnabled || !this.app.autoBake_) return null;
+
+        const viewState = this.manager.tabs.getViewState();
+        if (!viewState.tabsSynchronized) return null;
+
+        const inputState = this.manager.input.getSynchronizedInputState(viewState.activeInputTabId),
+            outputState = this.manager.output.getOutputState(viewState.activeOutputTabId);
+        if (!inputState || !Number.isSafeInteger(inputState.inputByteLength) || !outputState) {
+            return null;
+        }
+        return Object.freeze({inputState, outputState, viewState});
+    }
+
+
+    /**
      * Applies an authorized Agent patch to the visible Recipe.
      *
      * @param {Object} input - Detached Agent patch request.
@@ -526,9 +554,34 @@ class RecipeWaiter {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
         }
 
-        const result = this.transaction.applyAgentPatch(input, this.agentPatchPolicy);
+        const autoBakeContext = this.captureAgentAutoBakeContext();
+        let autoBakeTarget = null;
+        const transactionPolicy = {
+                prepareChanges: changes => this.agentPatchPolicy.prepareChanges(changes),
+                authorizePatch: patch => {
+                    const postflight = this.agentPatchPolicy.authorizePatch(
+                        patch,
+                        autoBakeContext?.inputState.inputByteLength ?? null
+                    );
+                    if (!autoBakeContext || postflight.agentBakeAllowed !== true) return;
+
+                    autoBakeTarget = this.manager.runTargets.requireActiveTarget(
+                        this.manager.runTargets.capture({
+                            source: RUN_TARGET_SOURCE.AGENT,
+                            recipeRevisionAtStart: input.expectedRevision + 1,
+                            inputStates: [autoBakeContext.inputState],
+                            outputStates: [autoBakeContext.outputState],
+                            ...autoBakeContext.viewState,
+                            executionOptions: this.app.options,
+                            progress: 0,
+                            step: false,
+                        })
+                    );
+                },
+            },
+            result = this.transaction.applyAgentPatch(input, transactionPolicy);
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
-            this.app.agentRecipeTransactionCommitted(result.change);
+            this.app.agentRecipeTransactionCommitted(result.change, autoBakeTarget);
             this.adjustWidth();
         }
         return result;

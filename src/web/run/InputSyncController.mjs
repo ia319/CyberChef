@@ -8,7 +8,7 @@ const INPUT_SYNC_RESULT_CODE = Object.freeze({
 
 
 /**
- * Validates one content-free Input identity record.
+ * Validates one Input identity and its resource metadata.
  *
  * @param {Object} state - Input identity from the InputWorker.
  * @returns {void}
@@ -18,7 +18,9 @@ function validateInputState(state) {
     if (!state || !Number.isSafeInteger(state.inputNum) || state.inputNum < 1 ||
         typeof state.inputGeneration !== "string" ||
         !/^\d+:\d+$/.test(state.inputGeneration) ||
-        !Number.isSafeInteger(state.inputRevision) || state.inputRevision < 0) {
+        !Number.isSafeInteger(state.inputRevision) || state.inputRevision < 0 ||
+        state.inputByteLength !== null &&
+            (!Number.isSafeInteger(state.inputByteLength) || state.inputByteLength < 0)) {
         throw new TypeError("Input identity is invalid");
     }
 }
@@ -57,6 +59,11 @@ class InputSyncController {
             state.inputRevision < current.inputRevision) {
             throw new RangeError("Input revision cannot move backwards");
         }
+        if (current?.inputGeneration === state.inputGeneration &&
+            state.inputRevision === current.inputRevision &&
+            state.inputByteLength !== current.inputByteLength) {
+            throw new RangeError("Input byte length cannot change without a revision");
+        }
         if (current && current.inputGeneration !== state.inputGeneration) {
             this.#settleInput(state.inputNum, INPUT_SYNC_RESULT_CODE.INPUT_REPLACED);
         }
@@ -65,6 +72,7 @@ class InputSyncController {
             inputNum: state.inputNum,
             inputGeneration: state.inputGeneration,
             inputRevision: state.inputRevision,
+            inputByteLength: state.inputByteLength,
         });
         this.#inputs.set(state.inputNum, registered);
         return registered;

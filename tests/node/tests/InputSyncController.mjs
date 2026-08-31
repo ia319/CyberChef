@@ -14,12 +14,14 @@ TestRegister.addApiTests([
             inputNum: 1,
             inputGeneration: "2:4",
             inputRevision: 7,
+            inputByteLength: 12,
         });
         const update = controller.startUpdate(1);
 
         assert.equal(controller.acknowledge({
             ...update.request,
             inputRevision: 8,
+            inputByteLength: 16,
             applied: true,
         }), true);
         assert.deepStrictEqual(await update.completion, {
@@ -29,12 +31,14 @@ TestRegister.addApiTests([
                 inputNum: 1,
                 inputGeneration: "2:4",
                 inputRevision: 8,
+                inputByteLength: 16,
             },
         });
         assert.deepStrictEqual(controller.getState(1), {
             inputNum: 1,
             inputGeneration: "2:4",
             inputRevision: 8,
+            inputByteLength: 16,
         });
     }),
 
@@ -44,6 +48,7 @@ TestRegister.addApiTests([
             inputNum: 1,
             inputGeneration: "1:1",
             inputRevision: 0,
+            inputByteLength: 0,
         });
         const update = controller.startUpdate(1);
 
@@ -51,6 +56,7 @@ TestRegister.addApiTests([
             ...update.request,
             inputGeneration: "1:2",
             inputRevision: 1,
+            inputByteLength: 1,
             applied: true,
         }), true);
         assert.deepStrictEqual(await update.completion, {
@@ -67,6 +73,7 @@ TestRegister.addApiTests([
             inputNum: 3,
             inputGeneration: "1:3",
             inputRevision: 2,
+            inputByteLength: 10,
         });
         const update = controller.startUpdate(3);
 
@@ -74,6 +81,7 @@ TestRegister.addApiTests([
             inputNum: 3,
             inputGeneration: "1:4",
             inputRevision: 0,
+            inputByteLength: null,
         });
         assert.deepStrictEqual(await update.completion, {
             ok: false,
@@ -89,12 +97,45 @@ TestRegister.addApiTests([
             inputNum: 1,
             inputGeneration: "1:1",
             inputRevision: 2,
+            inputByteLength: 5,
         });
 
         assert.throws(() => controller.registerState({
             inputNum: 1,
             inputGeneration: "1:1",
             inputRevision: 1,
+            inputByteLength: 4,
+        }), RangeError);
+    }),
+
+    it("InputSyncController: should reject invalid Input resource metadata", () => {
+        const controller = new InputSyncController();
+        assert.throws(() => controller.registerState({
+            inputNum: 1,
+            inputGeneration: "1:1",
+            inputRevision: 0,
+            inputByteLength: -1,
+        }), TypeError);
+        assert.throws(() => controller.registerState({
+            inputNum: 1,
+            inputGeneration: "1:1",
+            inputRevision: 0,
+        }), TypeError);
+    }),
+
+    it("InputSyncController: should bind byte length to the Input revision", () => {
+        const controller = new InputSyncController();
+        controller.registerState({
+            inputNum: 1,
+            inputGeneration: "1:1",
+            inputRevision: 0,
+            inputByteLength: 8,
+        });
+        assert.throws(() => controller.registerState({
+            inputNum: 1,
+            inputGeneration: "1:1",
+            inputRevision: 0,
+            inputByteLength: 9,
         }), RangeError);
     }),
 
@@ -104,12 +145,14 @@ TestRegister.addApiTests([
             inputNum: 1,
             inputGeneration: "1:1",
             inputRevision: 2,
+            inputByteLength: 5,
         });
         const update = controller.startUpdate(1);
 
         assert.equal(controller.acknowledge({
             ...update.request,
             inputRevision: 1,
+            inputByteLength: 4,
             applied: true,
         }), true);
         assert.deepStrictEqual(await update.completion, {
@@ -126,11 +169,13 @@ TestRegister.addApiTests([
             inputNum: 1,
             inputGeneration: "1:1",
             inputRevision: 0,
+            inputByteLength: 0,
         });
         controller.registerState({
             inputNum: 2,
             inputGeneration: "1:2",
             inputRevision: 0,
+            inputByteLength: 0,
         });
         const removed = controller.startUpdate(1),
             reset = controller.startUpdate(2);
