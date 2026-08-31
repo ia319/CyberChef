@@ -33,6 +33,7 @@ import "./tests/InputSyncController.mjs";
 import "./tests/RunTargetBuilder.mjs";
 import "./tests/RunCoordinator.mjs";
 import "./tests/RunOutcome.mjs";
+import "./tests/OutputProvenance.mjs";
 import "./tests/ChefExecution.mjs";
 import "./tests/RecipeModel.mjs";
 import "./tests/RecipePatch.mjs";

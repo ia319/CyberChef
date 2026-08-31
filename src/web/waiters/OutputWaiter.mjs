@@ -40,6 +40,11 @@ import {statusBar} from "../utils/statusBar.mjs";
 import {htmlPlugin} from "../utils/htmlWidget.mjs";
 import {copyOverride} from "../utils/copyOverride.mjs";
 import {RECIPE_TRANSACTION_SOURCE} from "../recipe/RecipeTransaction.mjs";
+import {
+    createOutputProvenance,
+    outputProvenanceMatchesTarget,
+} from "../run/OutputProvenance.mjs";
+import {RUN_STATE} from "../run/RunCoordinator.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
 
 
@@ -548,7 +553,127 @@ class OutputWaiter {
         return Object.freeze({
             outputTabId: output.inputNum,
             outputGeneration: output.outputGeneration,
+            outputVersion: output.outputVersion,
         });
+    }
+
+    /**
+     * Returns the immutable provenance currently attached to an Output.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @returns {Object|null} Content-free provenance or null.
+     */
+    getOutputProvenance(inputNum) {
+        return this.outputs[inputNum]?.provenance ?? null;
+    }
+
+    /**
+     * Checks whether a Run-scoped write belongs to the Output's bound provenance.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @param {Object|null} target - Optional bound Run target.
+     * @returns {boolean} Whether the write may update this Output.
+     */
+    acceptsRunTarget(inputNum, target) {
+        if (target === null) return this.outputExists(inputNum);
+        const output = this.outputs[inputNum];
+        return !!output && outputProvenanceMatchesTarget(
+            output.provenance,
+            target,
+            inputNum
+        );
+    }
+
+    /**
+     * Binds every Output in a Run before any Worker work is dispatched.
+     *
+     * @param {Object} target - Bound Run target.
+     * @returns {void}
+     */
+    bindRunTarget(target) {
+        const outputs = target?.inputTargets?.map(inputTarget =>
+            this.outputs[inputTarget.outputTabId]
+        );
+        if (!outputs || outputs.length < 1 || outputs.some((output, index) =>
+            !output || output.outputGeneration !== target.inputTargets[index].outputGeneration
+        )) {
+            throw new Error("Run Output target is unavailable");
+        }
+        const bindings = outputs.map((output, index) => ({
+            output,
+            provenance: createOutputProvenance(
+                target,
+                target.inputTargets[index].inputTabId,
+                this.getNextOutputVersion(output)
+            ),
+        }));
+
+        for (const {output, provenance} of bindings) {
+            output.outputVersion = provenance.outputVersion;
+            output.provenance = provenance;
+            output.bakeId = target.bakeId;
+            output.recipeRevision = target.recipeRevisionAtStart;
+        }
+    }
+
+    /**
+     * Publishes one terminal Output provenance transition.
+     *
+     * @param {Object} target - Bound Run target.
+     * @param {number} inputNum - Input and Output tab identity.
+     * @param {Object} outcome - Fixed Run outcome.
+     * @returns {boolean} Whether the matching Output settled.
+     */
+    settleRunTarget(target, inputNum, outcome) {
+        const output = this.outputs[inputNum];
+        if (!output || output.provenance?.terminalState !== null ||
+            !outputProvenanceMatchesTarget(output.provenance, target, inputNum)) {
+            return false;
+        }
+        const provenance = createOutputProvenance(
+            target,
+            inputNum,
+            this.getNextOutputVersion(output),
+            outcome
+        );
+        output.outputVersion = provenance.outputVersion;
+        output.provenance = provenance;
+        return true;
+    }
+
+    /**
+     * Checks whether an Output independently proves a current completed result.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @returns {boolean} Whether the Output is fresh for the current execution state.
+     */
+    outputIsFresh(inputNum) {
+        const output = this.outputs[inputNum],
+            provenance = output?.provenance,
+            inputState = this.manager.input.getSynchronizedInputState(inputNum);
+        return !!output && !!provenance && provenance.terminalState === RUN_STATE.COMPLETED &&
+            output.status === "baked" && provenance.recipeRevision ===
+                this.manager.recipe.getRecipeRevision() &&
+            provenance.inputTabId === inputState?.inputNum &&
+            provenance.inputGeneration === inputState?.inputGeneration &&
+            provenance.inputRevision === inputState?.inputRevision &&
+            provenance.outputTabId === output.inputNum &&
+            provenance.outputGeneration === output.outputGeneration &&
+            provenance.outputVersion === output.outputVersion &&
+            this.manager.runTargets.executionOptionsAreCurrent(provenance, this.app.options);
+    }
+
+    /**
+     * Calculates the next result identity owned by one Output record.
+     *
+     * @param {Object} output - Mutable Output record.
+     * @returns {number} Next Output version.
+     */
+    getNextOutputVersion(output) {
+        if (output.outputVersion === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("Output version limit reached");
+        }
+        return output.outputVersion + 1;
     }
 
     /**
@@ -578,6 +703,8 @@ class OutputWaiter {
             data: null,
             inputNum: inputNum,
             outputGeneration: this.createOutputGeneration(),
+            outputVersion: 0,
+            provenance: null,
             statusMessage: `Input ${inputNum} has not been baked yet.`,
             error: null,
             status: "inactive",
@@ -600,8 +727,10 @@ class OutputWaiter {
      * @param {ArrayBuffer | String} data
      * @param {number} inputNum
      * @param {boolean} set
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputValue(data, inputNum, set=true) {
+    updateOutputValue(data, inputNum, set=true, target=null) {
+        if (target !== null && !this.acceptsRunTarget(inputNum, target)) return;
         if (!this.outputExists(inputNum)) {
             this.addOutput(inputNum);
         }
@@ -625,9 +754,10 @@ class OutputWaiter {
      * @param {string} statusMessage
      * @param {number} inputNum
      * @param {boolean} [set=true]
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputMessage(statusMessage, inputNum, set=true) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputMessage(statusMessage, inputNum, set=true, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].statusMessage = statusMessage;
         if (set) this.set(inputNum);
     }
@@ -640,15 +770,16 @@ class OutputWaiter {
      * @param {Error} error
      * @param {number} inputNum
      * @param {number} [progress=0]
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputError(error, inputNum, progress=0) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputError(error, inputNum, progress=0, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
 
         const errorString = error.displayStr || error.toString();
 
         this.outputs[inputNum].error = errorString;
         this.outputs[inputNum].progress = progress;
-        this.updateOutputStatus("error", inputNum);
+        this.updateOutputStatus("error", inputNum, target);
     }
 
     /**
@@ -656,9 +787,10 @@ class OutputWaiter {
      *
      * @param {string} status
      * @param {number} inputNum
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputStatus(status, inputNum) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputStatus(status, inputNum, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].status = status;
 
         if (status !== "error") {
@@ -724,9 +856,10 @@ class OutputWaiter {
      * @param {number} progress
      * @param {number} total
      * @param {number} inputNum
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputProgress(progress, total, inputNum) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputProgress(progress, total, inputNum, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].progress = progress;
 
         if (progress !== false) {
@@ -791,10 +924,8 @@ class OutputWaiter {
             // If error, style the tab and handle the error
             // If done, display the output if it's the active tab
             // If inactive, show the last bake value (or blank)
-            const stale = output.status === "inactive" ||
-                output.status === "stale" ||
-                (output.status === "baked" && (output.bakeId < this.manager.worker.bakeId ||
-                    output.recipeRevision !== this.manager.recipe.getRecipeRevision()));
+            const stale = output.status === "inactive" || output.status === "stale" ||
+                (output.status === "baked" && !this.outputIsFresh(inputNum));
             if (stale) {
                 this.manager.controls.showStaleIndicator();
             } else {
@@ -1459,13 +1590,15 @@ class OutputWaiter {
             outputStatus = output.status,
             outputBakeId = output.bakeId,
             outputRecipeRevision = output.recipeRevision,
+            outputVersion = output.outputVersion,
             dish = this.getOutputDish(inputNum);
         let tabStr = "";
 
         if (dish !== null) {
             tabStr = await this.getDishTitle(dish, 100);
             if (this.outputs[inputNum] !== output || output.status !== outputStatus ||
-                output.bakeId !== outputBakeId || output.recipeRevision !== outputRecipeRevision) return;
+                output.bakeId !== outputBakeId || output.recipeRevision !== outputRecipeRevision ||
+                output.outputVersion !== outputVersion) return;
             tabStr = tabStr.replace(/[\n\r]/g, "");
         }
         this.manager.tabs.updateTabHeader(inputNum, tabStr, "output");

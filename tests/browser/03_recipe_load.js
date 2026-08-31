@@ -417,8 +417,6 @@ module.exports = {
                     step: false,
                 });
             window.__staleRecipeRun = {
-                previousOutputBakeId: output.bakeId,
-                previousOutputRecipeRevision: output.recipeRevision,
                 previousOutputData: output.data,
                 previousOutputText: app.manager.output.outputEditorView.state.doc.toString(),
             };
@@ -460,6 +458,8 @@ module.exports = {
                 outputStatus: output.status,
                 outputBakeId: output.bakeId,
                 outputRecipeRevision: output.recipeRevision,
+                outputTerminalState: output.provenance?.terminalState ?? null,
+                outputIsFresh: app.manager.output.outputIsFresh(output.inputNum),
                 outputDataUnchanged: output.data === record.previousOutputData,
                 outputText: app.manager.output.outputEditorView.state.doc.toString(),
                 staleVisible: !document.getElementById("stale-indicator").classList.contains("hidden"),
@@ -471,11 +471,10 @@ module.exports = {
             browser.assert.strictEqual(value.currentRecipeRevision, value.recipeRevisionAtStart + 1);
             browser.assert.strictEqual(value.finalRecipeRevision, value.currentRecipeRevision);
             browser.assert.strictEqual(value.outputStatus, "stale");
-            browser.assert.strictEqual(value.outputBakeId, value.previousOutputBakeId);
-            browser.assert.strictEqual(
-                value.outputRecipeRevision,
-                value.previousOutputRecipeRevision
-            );
+            browser.assert.strictEqual(value.outputBakeId, value.bakeId);
+            browser.assert.strictEqual(value.outputRecipeRevision, value.recipeRevisionAtStart);
+            browser.assert.strictEqual(value.outputTerminalState, "superseded");
+            browser.assert.strictEqual(value.outputIsFresh, false);
             browser.assert.strictEqual(value.outputDataUnchanged, true);
             browser.assert.strictEqual(value.outputText, value.previousOutputText);
             browser.assert.strictEqual(value.staleVisible, true);
@@ -536,13 +535,25 @@ module.exports = {
         browser.execute(() => {
             const app = window.app,
                 record = window.__staleOutputRender,
-                outputWaiter = app.manager.output;
-            outputWaiter.updateOutputBakeTarget(
-                app.manager.worker.bakeId,
-                record.currentRecipeRevision,
-                record.inputNum
-            );
-            outputWaiter.updateOutputStatus("baked", record.inputNum);
+                manager = app.manager,
+                outputWaiter = manager.output,
+                target = app.manager.worker.captureWorkspaceTarget({
+                    nums: [record.inputNum],
+                    inputStates: [manager.input.getSynchronizedInputState(record.inputNum)],
+                    source: "manual",
+                    progress: 0,
+                    step: false,
+                }),
+                request = manager.runs.ensure(target, {
+                    owner: "user",
+                    mode: "manual",
+                    reuseFresh: false,
+                }),
+                outcome = {state: "completed"};
+            outputWaiter.bindRunTarget(request.run.target);
+            outputWaiter.settleRunTarget(request.run.target, record.inputNum, outcome);
+            manager.runs.settleInput(request.run.bakeId, record.inputNum, outcome);
+            outputWaiter.updateOutputStatus("baked", record.inputNum, request.run.target);
         });
 
         browser.pause(100).execute(() => {

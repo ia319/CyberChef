@@ -220,12 +220,16 @@ class WorkerWaiter {
                 return;
             }
 
-            this.manager.output.updateOutputBakeTarget(
-                target.bakeId,
-                target.recipeRevisionAtStart,
-                inputNum
+            this.manager.output.settleRunTarget(target, inputNum, {
+                state: RUN_STATE.FAILED,
+                failureKind,
+            });
+            this.manager.output.updateOutputError(
+                "Worker execution failed.",
+                inputNum,
+                0,
+                target
             );
-            this.manager.output.updateOutputError("Worker execution failed.", inputNum, 0);
             this.manager.runs.settleInput(target.bakeId, inputNum, {
                 state: RUN_STATE.FAILED,
                 failureKind,
@@ -524,24 +528,28 @@ class WorkerWaiter {
         switch (r.action) {
             case WORKER_ACTION.BAKE_COMPLETE: {
                 const outcome = getRunOutcome(r.data);
+                this.manager.output.settleRunTarget(
+                    workerObj.runTarget,
+                    inputNum,
+                    outcome
+                );
                 log.debug(`Bake ${inputNum} complete.`);
                 this.manager.timing.recordTime("bakeComplete", inputNum);
                 this.manager.timing.recordTime("bakeDuration", inputNum, r.data.duration);
 
                 if (r.data.error) {
                     this.app.handleError(r.data.error);
-                    this.manager.output.updateOutputBakeTarget(
-                        r.data.bakeId,
-                        r.data.recipeRevisionAtStart,
-                        inputNum
+                    this.manager.output.updateOutputError(
+                        r.data.error,
+                        inputNum,
+                        r.data.progress,
+                        workerObj.runTarget
                     );
-                    this.manager.output.updateOutputError(r.data.error, inputNum, r.data.progress);
                 } else {
                     this.updateOutput(
                         r.data,
                         inputNum,
-                        r.data.bakeId,
-                        r.data.recipeRevisionAtStart,
+                        workerObj.runTarget,
                         r.data.progress
                     );
                 }
@@ -552,26 +560,39 @@ class WorkerWaiter {
                 this.workerFinished(workerObj);
                 break;
             }
-            case WORKER_ACTION.BAKE_ERROR:
-                this.app.handleError(r.data.error);
-                this.manager.output.updateOutputBakeTarget(
-                    r.data.bakeId,
-                    r.data.recipeRevisionAtStart,
-                    inputNum
-                );
-                this.manager.output.updateOutputError(r.data.error, inputNum, r.data.progress ?? 0);
-                this.app.progress = r.data.progress ?? 0;
-                this.manager.runs.settleInput(r.data.bakeId, inputNum, {
+            case WORKER_ACTION.BAKE_ERROR: {
+                const outcome = {
                     state: RUN_STATE.FAILED,
                     failureKind: RUN_FAILURE_KIND.FATAL,
-                });
+                };
+                this.manager.output.settleRunTarget(workerObj.runTarget, inputNum, outcome);
+                this.app.handleError(r.data.error);
+                this.manager.output.updateOutputError(
+                    r.data.error,
+                    inputNum,
+                    r.data.progress ?? 0,
+                    workerObj.runTarget
+                );
+                this.app.progress = r.data.progress ?? 0;
+                this.manager.runs.settleInput(r.data.bakeId, inputNum, outcome);
                 this.workerFinished(workerObj);
                 break;
+            }
             case WORKER_ACTION.STATUS_MESSAGE:
-                this.manager.output.updateOutputMessage(r.data.message, inputNum, true);
+                this.manager.output.updateOutputMessage(
+                    r.data.message,
+                    inputNum,
+                    true,
+                    workerObj.runTarget
+                );
                 break;
             case WORKER_ACTION.PROGRESS_MESSAGE:
-                this.manager.output.updateOutputProgress(r.data.progress, r.data.total, inputNum);
+                this.manager.output.updateOutputProgress(
+                    r.data.progress,
+                    r.data.total,
+                    inputNum,
+                    workerObj.runTarget
+                );
                 break;
             case WORKER_ACTION.OPTION_UPDATE:
                 if (Object.prototype.hasOwnProperty.call(this.app.options, r.data.option)) {
@@ -593,27 +614,30 @@ class WorkerWaiter {
      *
      * @param {Object} data
      * @param {number} inputNum
-     * @param {number} bakeId
-     * @param {number} recipeRevisionAtStart
+     * @param {Object} target - Bound single-Input Run target.
      * @param {number} progress
      */
-    updateOutput(data, inputNum, bakeId, recipeRevisionAtStart, progress) {
-        this.manager.output.updateOutputBakeTarget(bakeId, recipeRevisionAtStart, inputNum);
+    updateOutput(data, inputNum, target, progress) {
         if (progress === this.recipeConfig.length) {
             progress = false;
         }
-        this.manager.output.updateOutputProgress(progress, this.recipeConfig.length, inputNum);
-        this.manager.output.updateOutputValue(data, inputNum, false);
+        this.manager.output.updateOutputProgress(
+            progress,
+            this.recipeConfig.length,
+            inputNum,
+            target
+        );
+        this.manager.output.updateOutputValue(data, inputNum, false, target);
 
         if (progress !== false) {
-            this.manager.output.updateOutputStatus("error", inputNum);
+            this.manager.output.updateOutputStatus("error", inputNum, target);
 
             if (inputNum === this.manager.tabs.getActiveTab("input")) {
                 this.manager.recipe.updateBreakpointIndicator(progress);
             }
 
         } else {
-            this.manager.output.updateOutputStatus("baked", inputNum);
+            this.manager.output.updateOutputStatus("baked", inputNum, target);
         }
     }
 
@@ -670,6 +694,13 @@ class WorkerWaiter {
     cancelBake(silent=false, killAll=false, terminalState=RUN_STATE.CANCELLED) {
         const target = this.bakeTarget;
         if (target && terminalState) {
+            for (const inputTarget of target.inputTargets) {
+                this.manager.output.settleRunTarget(
+                    target,
+                    inputTarget.inputTabId,
+                    {state: terminalState}
+                );
+            }
             this.manager.runs.settle(target.bakeId, terminalState);
         }
         const deactiveOutputs = new Set();
@@ -699,11 +730,11 @@ class WorkerWaiter {
 
         deactiveOutputs.forEach(num => {
             if (terminalState === RUN_STATE.SUPERSEDED) {
-                this.manager.output.updateOutputStatus("stale", num);
+                this.manager.output.updateOutputStatus("stale", num, target);
             } else if (terminalState === RUN_STATE.TIMED_OUT) {
-                this.manager.output.updateOutputError("Bake timed out.", num, 0);
+                this.manager.output.updateOutputError("Bake timed out.", num, 0, target);
             } else {
-                this.manager.output.updateOutputStatus("inactive", num);
+                this.manager.output.updateOutputStatus("inactive", num, target);
             }
         });
 
@@ -820,8 +851,13 @@ class WorkerWaiter {
         if (typeof nextInput.inputNum === "string") nextInput.inputNum = parseInt(nextInput.inputNum, 10);
 
         log.debug(`Baking input ${nextInput.inputNum}.`);
-        this.manager.output.updateOutputMessage(`Baking input ${nextInput.inputNum}...`, nextInput.inputNum, false);
-        this.manager.output.updateOutputStatus("baking", nextInput.inputNum);
+        this.manager.output.updateOutputMessage(
+            `Baking input ${nextInput.inputNum}...`,
+            nextInput.inputNum,
+            false,
+            this.bakeTarget
+        );
+        this.manager.output.updateOutputStatus("baking", nextInput.inputNum, this.bakeTarget);
 
         this.chefWorkers[workerIdx].inputNum = nextInput.inputNum;
         this.chefWorkers[workerIdx].runTarget = this.manager.runTargets.forInput(
@@ -897,6 +933,12 @@ class WorkerWaiter {
         });
         if (request.decision !== RUN_DECISION.STARTED) return request;
 
+        try {
+            this.manager.output.bindRunTarget(request.run.target);
+        } catch (err) {
+            this.manager.runs.settle(request.run.bakeId, RUN_STATE.SUPERSEDED);
+            throw err;
+        }
         this.bakeId = request.run.bakeId;
         this.bakeTarget = request.run.target;
         this.recipeConfig = recipeConfig;
@@ -948,16 +990,18 @@ class WorkerWaiter {
         this.loadingOutputs--;
         if (this.app.baking && this.matchesQueuedInput(inputData) &&
             this.isCurrentBakeTarget(this.bakeTarget)) {
-            this.manager.output.updateOutputBakeTarget(
-                this.bakeTarget.bakeId,
-                this.bakeTarget.recipeRevisionAtStart,
-                inputData.inputNum
-            );
-            this.manager.output.updateOutputError("Error queueing the input for a bake.", inputData.inputNum, 0);
-            this.manager.runs.settleInput(this.bakeTarget.bakeId, inputData.inputNum, {
+            const outcome = {
                 state: RUN_STATE.FAILED,
                 failureKind: RUN_FAILURE_KIND.QUEUE,
-            });
+            };
+            this.manager.output.settleRunTarget(this.bakeTarget, inputData.inputNum, outcome);
+            this.manager.output.updateOutputError(
+                "Error queueing the input for a bake.",
+                inputData.inputNum,
+                0,
+                this.bakeTarget
+            );
+            this.manager.runs.settleInput(this.bakeTarget.bakeId, inputData.inputNum, outcome);
 
             if (this.inputNums.length > 0) {
                 this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
@@ -1029,8 +1073,13 @@ class WorkerWaiter {
         }
 
         for (let i = 0; i < this.inputNums.length; i++) {
-            this.manager.output.updateOutputMessage(`Input ${inputNums[i]} has not been baked yet.`, inputNums[i], false);
-            this.manager.output.updateOutputStatus("pending", inputNums[i]);
+            this.manager.output.updateOutputMessage(
+                `Input ${inputNums[i]} has not been baked yet.`,
+                inputNums[i],
+                false,
+                this.bakeTarget
+            );
+            this.manager.output.updateOutputStatus("pending", inputNums[i], this.bakeTarget);
         }
 
         let numBakes = this.chefWorkers.length;
@@ -1042,6 +1091,23 @@ class WorkerWaiter {
             this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
         }
         if (numBakes === 0) {
+            const outcome = {
+                state: RUN_STATE.FAILED,
+                failureKind: RUN_FAILURE_KIND.WORKER,
+            };
+            for (const inputTarget of this.bakeTarget.inputTargets) {
+                this.manager.output.settleRunTarget(
+                    this.bakeTarget,
+                    inputTarget.inputTabId,
+                    outcome
+                );
+                this.manager.output.updateOutputError(
+                    "Worker execution failed.",
+                    inputTarget.inputTabId,
+                    0,
+                    this.bakeTarget
+                );
+            }
             this.manager.runs.settle(
                 runRequest.run.bakeId,
                 RUN_STATE.FAILED,

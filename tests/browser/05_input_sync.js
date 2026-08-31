@@ -68,6 +68,8 @@ module.exports = {
                 const storedValue = await input.getInputValue(inputNum),
                     output = app.manager.output.outputs[inputNum],
                     run = manager.runs.getRun(capturedTarget.bakeId),
+                    provenance = manager.output.getOutputProvenance(inputNum),
+                    outputFreshBeforeOptions = manager.output.outputIsFresh(inputNum),
                     decode = value => typeof value === "string" ? value :
                         new TextDecoder().decode(value);
                 if (!capturedTarget) throw new Error("Bake target was not captured");
@@ -76,9 +78,10 @@ module.exports = {
                 optionsChanged = true;
                 app.options.wordWrap = !originalWordWrap;
                 const displayOptionCurrent = manager.runTargets.executionIsCurrent(
-                    capturedTarget,
-                    worker.getCurrentExecutionState(capturedTarget)
-                );
+                        capturedTarget,
+                        worker.getCurrentExecutionState(capturedTarget)
+                    ),
+                    outputFreshAfterDisplayOption = manager.output.outputIsFresh(inputNum);
                 hadReturnType = Object.prototype.hasOwnProperty.call(app.options, "returnType");
                 originalReturnType = app.options.returnType;
                 app.options.returnType = "string";
@@ -102,12 +105,29 @@ module.exports = {
                         mode: run.mode,
                         inputState: run.inputs[0].state,
                     },
+                    provenance: {
+                        bakeId: provenance.bakeId,
+                        recipeRevision: provenance.recipeRevision,
+                        inputTabId: provenance.inputTabId,
+                        inputGeneration: provenance.inputGeneration,
+                        inputRevision: provenance.inputRevision,
+                        outputTabId: provenance.outputTabId,
+                        outputGeneration: provenance.outputGeneration,
+                        outputVersion: provenance.outputVersion,
+                        executionOptionsVersion: provenance.executionOptionsVersion,
+                        terminalState: provenance.terminalState,
+                    },
+                    outputFreshBeforeOptions,
+                    outputFreshAfterDisplayOption,
+                    outputFreshAfterExecutionOption: manager.output.outputIsFresh(inputNum),
                     target: {
                         source: capturedTarget.source,
                         inputGeneration: targetInput.inputGeneration,
                         inputRevision: targetInput.inputRevision,
                         outputGeneration: targetInput.outputGeneration,
                         bakeId: capturedTarget.bakeId,
+                        recipeRevisionAtStart: capturedTarget.recipeRevisionAtStart,
+                        executionOptionsVersion: capturedTarget.executionOptionsVersion,
                         bakeIdDelta: capturedTarget.bakeId - bakeIdBefore,
                         frozen: Object.isFrozen(capturedTarget) &&
                             Object.isFrozen(capturedTarget.inputTargets) &&
@@ -148,6 +168,21 @@ module.exports = {
                 mode: "manual",
                 inputState: "completed",
             });
+            browser.assert.deepStrictEqual(value.provenance, {
+                bakeId: value.target.bakeId,
+                recipeRevision: value.target.recipeRevisionAtStart,
+                inputTabId: 1,
+                inputGeneration: value.synchronized.inputGeneration,
+                inputRevision: value.synchronized.inputRevision,
+                outputTabId: 1,
+                outputGeneration: value.outputBefore.outputGeneration,
+                outputVersion: value.outputBefore.outputVersion + 2,
+                executionOptionsVersion: value.target.executionOptionsVersion,
+                terminalState: "completed",
+            });
+            browser.assert.strictEqual(value.outputFreshBeforeOptions, true);
+            browser.assert.strictEqual(value.outputFreshAfterDisplayOption, true);
+            browser.assert.strictEqual(value.outputFreshAfterExecutionOption, false);
             browser.assert.strictEqual(value.target.source, "manual");
             browser.assert.strictEqual(
                 value.target.inputGeneration,
