@@ -73,6 +73,10 @@ class OutputWaiter {
         this.currentOutputCache = null;
         this.currentOutputCacheGeneration = null;
         this.outputRenderGeneration = 0;
+        this.loaderRequested = false;
+        this.appendBombeTimeout = null;
+        this.showOutputLoaderTimeout = null;
+        this.removeBombeTimeout = null;
         this.initEditor();
 
         this.outputs = {};
@@ -1068,39 +1072,49 @@ class OutputWaiter {
     toggleLoader(value) {
         const outputLoader = document.getElementById("output-loader"),
             animation = document.getElementById("output-loader-animation");
+        this.loaderRequested = value;
 
         if (value) {
             this.manager.controls.hideStaleIndicator();
+            clearTimeout(this.removeBombeTimeout);
+            this.removeBombeTimeout = null;
+
             // Don't add the bombe if it's already there or scheduled to be loaded
             if (animation.children.length === 0 && !this.appendBombeTimeout) {
                 // Start a timer to add the Bombe to the DOM just before we make it
                 // visible so that there is no stuttering
-                this.appendBombeTimeout = setTimeout(function() {
+                this.appendBombeTimeout = setTimeout(() => {
                     this.appendBombeTimeout = null;
-                    animation.appendChild(this.bombeEl);
-                }.bind(this), 150);
+                    if (this.loaderRequested && !animation.contains(this.bombeEl)) {
+                        animation.appendChild(this.bombeEl);
+                    }
+                }, 150);
             }
 
-            if (outputLoader.style.visibility !== "visible" && !this.outputLoaderTimeout) {
+            if (outputLoader.style.visibility !== "visible" && !this.showOutputLoaderTimeout) {
                 // Show the loading screen
-                this.outputLoaderTimeout = setTimeout(function() {
-                    this.outputLoaderTimeout = null;
+                this.showOutputLoaderTimeout = setTimeout(() => {
+                    this.showOutputLoaderTimeout = null;
+                    if (!this.loaderRequested) return;
                     outputLoader.style.visibility = "visible";
                     outputLoader.style.opacity = 1;
                 }, 200);
             }
-        } else if (outputLoader.style.visibility !== "hidden" || this.appendBombeTimeout || this.outputLoaderTimeout) {
+        } else {
             clearTimeout(this.appendBombeTimeout);
-            clearTimeout(this.outputLoaderTimeout);
+            clearTimeout(this.showOutputLoaderTimeout);
             this.appendBombeTimeout = null;
-            this.outputLoaderTimeout = null;
+            this.showOutputLoaderTimeout = null;
 
-            // Remove the Bombe from the DOM to save resources
-            this.outputLoaderTimeout = setTimeout(function () {
-                this.outputLoaderTimeout = null;
-                if (animation.children.length > 0)
-                    animation.removeChild(this.bombeEl);
-            }.bind(this), 500);
+            if (animation.contains(this.bombeEl) && !this.removeBombeTimeout) {
+                // Remove the Bombe after the fade-out only if no newer request needs it.
+                this.removeBombeTimeout = setTimeout(() => {
+                    this.removeBombeTimeout = null;
+                    if (!this.loaderRequested && animation.contains(this.bombeEl)) {
+                        animation.removeChild(this.bombeEl);
+                    }
+                }, 500);
+            }
             outputLoader.style.opacity = 0;
             outputLoader.style.visibility = "hidden";
         }

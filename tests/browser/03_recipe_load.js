@@ -568,6 +568,43 @@ module.exports = {
         });
     },
 
+    "Output loader survives a new request during cleanup": browser => {
+        browser.executeAsync(async done => {
+            const output = window.app.manager.output,
+                loader = document.getElementById("output-loader"),
+                animation = document.getElementById("output-loader-animation"),
+                wait = delay => new Promise(resolve => setTimeout(resolve, delay));
+
+            output.toggleLoader(false);
+            await wait(550);
+            output.toggleLoader(true);
+            await wait(250);
+            output.toggleLoader(false);
+            output.toggleLoader(true);
+            await wait(250);
+
+            const duringNewRequest = {
+                visible: loader.style.visibility === "visible",
+                opaque: loader.style.opacity === "1",
+                animationAttached: animation.contains(output.bombeEl),
+            };
+
+            output.toggleLoader(false);
+            await wait(550);
+            done({
+                duringNewRequest,
+                animationRemoved: !animation.contains(output.bombeEl),
+            });
+        }, [], ({value}) => {
+            browser.assert.deepStrictEqual(value.duringNewRequest, {
+                visible: true,
+                opaque: true,
+                animationAttached: true,
+            });
+            browser.assert.strictEqual(value.animationRemoved, true);
+        });
+    },
+
     "Silent Bake reaches its terminal state": browser => {
         browser.execute(() => {
             const app = window.app,
