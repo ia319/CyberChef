@@ -45,6 +45,10 @@ import {
     outputProvenanceMatchesTarget,
 } from "../run/OutputProvenance.mjs";
 import {RUN_STATE} from "../run/RunCoordinator.mjs";
+import {
+    ANALYSIS_OWNER,
+    ANALYSIS_STATE,
+} from "../analysis/AnalysisCoordinator.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
 
 
@@ -1735,10 +1739,19 @@ class OutputWaiter {
             !this.isCurrentOutputProvenance(provenance)) return;
         const buffer = await this.getDishBuffer(dish);
         if (!this.isCurrentOutputProvenance(provenance)) return;
-        const sample = buffer.slice(0, 1000) || "";
+        const sample = buffer.slice(0, 1000);
 
-        if (sample.length || sample.byteLength) {
-            this.manager.background.magic(sample, provenance);
+        if (!sample.byteLength) return;
+
+        const request = this.manager.background.magic(
+                sample,
+                provenance,
+                ANALYSIS_OWNER.UI
+            ),
+            completion = request.completion ? await request.completion : null;
+        if (completion?.analysis.terminalState === ANALYSIS_STATE.SIGNALS_READY &&
+            this.app.options.autoMagic && this.isCurrentOutputProvenance(provenance)) {
+            this.backgroundMagicResult(completion.value, provenance);
         }
     }
 

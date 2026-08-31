@@ -781,6 +781,12 @@ module.exports = {
             outputWaiter.getDishBuffer = async () => new Uint8Array([65]).buffer;
             manager.background.magic = (sample, provenance) => {
                 dispatchedProvenance = provenance;
+                return {
+                    completion: Promise.resolve({
+                        analysis: {terminalState: "noSuggestion"},
+                        value: null,
+                    }),
+                };
             };
             app.options.autoMagic = true;
             await outputWaiter.backgroundMagic();
@@ -791,20 +797,15 @@ module.exports = {
             outputWaiter.backgroundMagicResult(suggestion, firstProvenance);
             const currentResultVisible = !document.getElementById("magic").classList.contains("hidden");
             outputWaiter.hideMagicButton();
-            manager.background.magic(
-                new TextEncoder().encode("dGVzdA==").buffer,
-                firstProvenance
-            );
-            const deadline = Date.now() + 2500;
-            while (document.getElementById("magic").classList.contains("hidden") &&
-                Date.now() < deadline) {
-                await new Promise(resolve => setTimeout(resolve, 25));
-            }
+            outputWaiter.getDishBuffer = async () =>
+                new TextEncoder().encode("dGVzdA==").buffer;
+            app.options.autoMagic = true;
+            await outputWaiter.backgroundMagic();
+            outputWaiter.getDishBuffer = originalGetDishBuffer;
+            app.options.autoMagic = originalAutoMagic;
             const workerResultVisible = !document.getElementById("magic").classList.contains("hidden"),
-                workerRequestSettled = manager.background.activeMagicId === null &&
-                    manager.background.callbacks.size === 0 &&
-                    manager.background.magicProvenance.size === 0 &&
-                    manager.background.timeout === null,
+                workerRequestSettled = manager.background.activeAnalysis === null &&
+                    manager.background.callbacks.size === 0,
                 secondProvenance = bindOutput("completed");
             outputWaiter.hideMagicButton();
             outputWaiter.backgroundMagicResult(suggestion, firstProvenance);

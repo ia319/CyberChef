@@ -29,6 +29,7 @@ import {AgentBakeService} from "./webmcp/AgentBakeService.mjs";
 import {TOOL_NAME} from "./webmcp/ToolDefinitions.mjs";
 import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
 import {RunCoordinator} from "./run/RunCoordinator.mjs";
+import {AnalysisCoordinator} from "./analysis/AnalysisCoordinator.mjs";
 
 
 /**
@@ -75,6 +76,10 @@ class Manager {
         this.runs        = new RunCoordinator({
             onExclusiveAgentAbort: run => this.worker?.terminateCoordinatedRun(run),
             onTimeout: run => this.worker?.terminateCoordinatedRun(run),
+        });
+        this.analyses    = new AnalysisCoordinator({
+            onAbandoned: analysis => this.background?.cancelAnalysis(analysis.analysisId),
+            onTimeout: analysis => this.background?.cancelAnalysis(analysis.analysisId),
         });
         this.timing      = new TimingWaiter(this.app, this);
         this.worker      = new WorkerWaiter(this.app, this);

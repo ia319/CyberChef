@@ -5,7 +5,17 @@
  */
 
 import ChefWorker from "worker-loader?inline=no-fallback!../../core/ChefWorker.js";
-import {RUN_STATE} from "../run/RunCoordinator.mjs";
+import {
+    ANALYSIS_DECISION,
+    ANALYSIS_OWNER,
+    ANALYSIS_STATE,
+    analysisTargetMatches,
+    createAnalysisTarget,
+} from "../analysis/AnalysisCoordinator.mjs";
+
+
+const MAX_ANALYSIS_SAMPLE_BYTES = 1000;
+const MAX_ANALYSIS_CANDIDATES = 5;
 
 /**
  * Waiter to handle conversations with a ChefWorker in the background.
@@ -23,10 +33,8 @@ class BackgroundWorkerWaiter {
         this.manager = manager;
 
         this.callbacks = new Map();
-        this.magicProvenance = new Map();
         this.callbackID = 0;
-        this.activeMagicId = null;
-        this.timeout = null;
+        this.activeAnalysis = null;
     }
 
 
@@ -37,6 +45,8 @@ class BackgroundWorkerWaiter {
         log.debug("Registering new background ChefWorker");
         this.chefWorker = new ChefWorker();
         this.chefWorker.addEventListener("message", this.handleChefMessage.bind(this));
+        this.chefWorker.addEventListener("error", this.handleChefFailure.bind(this));
+        this.chefWorker.addEventListener("messageerror", this.handleChefFailure.bind(this));
         this.chefWorker.postMessage({
             action: "setLogPrefix",
             data: "BGChefWorker"
@@ -72,11 +82,6 @@ class BackgroundWorkerWaiter {
                     callback = this.callbacks.get(id);
                 if (callback) {
                     this.callbacks.delete(id);
-                    if (this.activeMagicId === id) {
-                        clearTimeout(this.timeout);
-                        this.activeMagicId = null;
-                        this.timeout = null;
-                    }
                     callback.call(this, r.data, id);
                 }
                 break;
@@ -97,22 +102,62 @@ class BackgroundWorkerWaiter {
 
 
     /**
-     * Cancels the current bake by terminating the ChefWorker and creating a new one.
+     * Settles an active analysis after a Worker transport failure.
+     */
+    handleChefFailure() {
+        const analysisId = this.activeAnalysis?.analysisId;
+        if (analysisId === undefined) return;
+        this.manager.analyses.settle(analysisId, ANALYSIS_STATE.FAILED);
+        this.cancelAnalysis(analysisId);
+    }
+
+
+    /**
+     * Cancels the current background bake and creates a new Worker.
      *
      * @param {number|null} [id=null] - Request identity when cancellation came from a timer.
+     * @returns {boolean} Whether active Worker work was cancelled.
      */
     cancelBake(id=null) {
-        if (id !== null && id !== this.activeMagicId) return;
-        clearTimeout(this.timeout);
-        this.timeout = null;
-        if (this.activeMagicId !== null) {
-            this.callbacks.delete(this.activeMagicId);
-            this.magicProvenance.delete(this.activeMagicId);
-            this.activeMagicId = null;
-        }
+        const activeId = this.activeAnalysis?.workerRequestId;
+        if (id !== null && id !== activeId) return false;
+        if (activeId !== undefined) this.callbacks.delete(activeId);
+        this.activeAnalysis = null;
         if (this.chefWorker)
             this.chefWorker.terminate();
         this.registerChefWorker();
+        return activeId !== undefined;
+    }
+
+
+    /**
+     * Cancels Worker work for one settled analysis.
+     *
+     * @param {number} analysisId - Analysis identity.
+     * @returns {boolean} Whether matching Worker work was cancelled.
+     */
+    cancelAnalysis(analysisId) {
+        if (this.activeAnalysis?.analysisId !== analysisId) return false;
+        return this.cancelBake(this.activeAnalysis.workerRequestId);
+    }
+
+
+    /**
+     * Marks active work stale when it belongs to another Output.
+     *
+     * @param {Object|null} target - Current completed Output target.
+     * @returns {boolean} Whether stale work was cancelled.
+     */
+    invalidateAnalysis(target=null) {
+        const active = this.activeAnalysis,
+            analysis = active ? this.manager.analyses.getAnalysis(active.analysisId) : null;
+        if (!analysis || target && analysisTargetMatches(analysis.target, target)) return false;
+        const settled = this.manager.analyses.settle(
+            analysis.analysisId,
+            ANALYSIS_STATE.STALE
+        );
+        this.cancelAnalysis(analysis.analysisId);
+        return settled;
     }
 
 
@@ -157,26 +202,42 @@ class BackgroundWorkerWaiter {
     /**
      * Asks the Magic operation what it can do with the input data.
      *
-     * @param {string|ArrayBuffer} input
+     * @param {ArrayBuffer} input - Bounded Output sample.
      * @param {Object} provenance - Fresh Output provenance that produced the sample.
+     * @param {string} [owner=ANALYSIS_OWNER.UI] - Trusted analysis owner.
+     * @param {AbortSignal|null} [signal=null] - Optional owner cancellation signal.
+     * @returns {Object} Coordinator decision and optional completion Promise.
      */
-    magic(input, provenance) {
-        if (!provenance || provenance.terminalState !== RUN_STATE.COMPLETED) return;
+    magic(input, provenance, owner=ANALYSIS_OWNER.UI, signal=null) {
+        if (!(input instanceof ArrayBuffer) || input.byteLength < 1 ||
+            input.byteLength > MAX_ANALYSIS_SAMPLE_BYTES) {
+            throw new TypeError("Analysis sample is invalid");
+        }
+        const target = createAnalysisTarget(provenance);
+        this.invalidateAnalysis(target);
+        const request = this.manager.analyses.ensure(target, {owner, signal});
+        if (request.decision !== ANALYSIS_DECISION.STARTED) return request;
 
-        // If we're still working on the previous bake, cancel it before starting a new one.
-        if (this.activeMagicId !== null) this.cancelBake(this.activeMagicId);
-
-        const id = this.bake(input, [
-            {
-                "op": "Magic",
-                "args": [3, false, false]
-            }
-        ], {}, 0, false, this.magicComplete, provenance.recipeRevision);
-        this.magicProvenance.set(id, provenance);
-        this.activeMagicId = id;
-
-        // Cancel this bake if it takes too long.
-        this.timeout = setTimeout(() => this.cancelBake(id), 3000);
+        try {
+            const workerRequestId = this.bake(input, [
+                {
+                    "op": "Magic",
+                    "args": [3, false, false]
+                }
+            ], {}, 0, false, this.magicComplete, target.recipeRevision);
+            this.activeAnalysis = {
+                analysisId: request.analysis.analysisId,
+                workerRequestId,
+                provenance,
+            };
+            this.manager.analyses.markRunning(request.analysis.analysisId);
+        } catch {
+            this.manager.analyses.settle(
+                request.analysis.analysisId,
+                ANALYSIS_STATE.FAILED
+            );
+        }
+        return request;
     }
 
 
@@ -188,12 +249,28 @@ class BackgroundWorkerWaiter {
      */
     magicComplete(response, id) {
         log.debug("--- Background Magic Bake complete ---");
-        const provenance = this.magicProvenance.get(id);
-        this.magicProvenance.delete(id);
-        if (!provenance || !response || response.error ||
-            response.recipeRevisionAtStart !== provenance.recipeRevision) return;
+        const active = this.activeAnalysis;
+        if (!active || active.workerRequestId !== id) return;
+        this.activeAnalysis = null;
 
-        this.manager.output.backgroundMagicResult(response.dish.value, provenance);
+        const analysisId = active.analysisId;
+        if (!this.manager.analyses.isActive(analysisId)) return;
+        if (!response || response.recipeRevisionAtStart !== active.provenance.recipeRevision ||
+            !this.manager.output.isCurrentOutputProvenance(active.provenance)) {
+            this.manager.analyses.settle(analysisId, ANALYSIS_STATE.STALE);
+            return;
+        }
+        if (response.error || !Array.isArray(response.dish?.value)) {
+            this.manager.analyses.settle(analysisId, ANALYSIS_STATE.FAILED);
+            return;
+        }
+
+        const candidates = response.dish.value.slice(0, MAX_ANALYSIS_CANDIDATES);
+        this.manager.analyses.settle(
+            analysisId,
+            candidates.length ? ANALYSIS_STATE.SIGNALS_READY : ANALYSIS_STATE.NO_SUGGESTION,
+            candidates.length ? candidates : null
+        );
     }
 
 
@@ -212,3 +289,8 @@ class BackgroundWorkerWaiter {
 
 
 export default BackgroundWorkerWaiter;
+
+export {
+    MAX_ANALYSIS_CANDIDATES,
+    MAX_ANALYSIS_SAMPLE_BYTES,
+};
