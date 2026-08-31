@@ -631,13 +631,12 @@ class InputWaiter {
         debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["loading"])();
         let inputState;
         try {
-            inputState = await this.flushActiveInput();
+            inputState = await this.flushActiveInputForBake();
         } catch (err) {
             this.app.handleError(err, true);
             debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["bake"])();
             return null;
         }
-        cancelDebounce("stateChange");
         this.inputWorker.postMessage({
             action: "bakeAll",
             data: {source},
@@ -1070,6 +1069,17 @@ class InputWaiter {
         } finally {
             if (this.inputFlush?.completion === completion) this.inputFlush = null;
         }
+    }
+
+    /**
+     * Synchronizes the active editor without leaving a second Auto Bake queued.
+     *
+     * @returns {Promise<Object>} Worker-confirmed active Input identity.
+     */
+    async flushActiveInputForBake() {
+        const inputState = await this.flushActiveInput();
+        cancelDebounce("stateChange");
+        return inputState;
     }
 
     /**

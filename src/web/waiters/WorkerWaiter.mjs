@@ -24,6 +24,7 @@ import {
     RUN_MODE,
     RUN_STATE,
     getRunOwner,
+    targetCovers,
 } from "../run/RunCoordinator.mjs";
 import {getRunOutcome} from "../run/RunOutcome.mjs";
 
@@ -920,8 +921,9 @@ class WorkerWaiter {
      *
      * @param {Object[]} recipeConfig - Recipe snapshot.
      * @param {Object} target - Immutable workspace execution target.
+     * @param {Object|null} [preparedRequest=null] - Optional coordinator request already bound to target.
      */
-    bake(recipeConfig, target) {
+    bake(recipeConfig, target, preparedRequest=null) {
         const owner = getRunOwner(target.source);
         if (!owner) {
             throw new RunTargetError(
@@ -929,7 +931,12 @@ class WorkerWaiter {
                 "Run source is invalid"
             );
         }
-        const request = this.manager.runs.ensure(target, {
+        if (preparedRequest !== null &&
+            (preparedRequest.decision !== RUN_DECISION.STARTED ||
+                !targetCovers(preparedRequest.run?.target, target))) {
+            throw new TypeError("Prepared Run request does not cover the Bake target");
+        }
+        const request = preparedRequest ?? this.manager.runs.ensure(target, {
             owner,
             mode: target.source,
             reuseFresh: target.source === RUN_TARGET_SOURCE.AGENT,
@@ -1022,10 +1029,11 @@ class WorkerWaiter {
      * Starts an authorized Agent Auto Bake only while its active workspace target remains current.
      *
      * @param {Object} target - Immutable active Input execution target.
-     * @returns {Promise<Object>|null} Run completion or null when user state has priority.
+     * @param {AbortSignal|null} [signal=null] - Optional Agent waiter cancellation signal.
+     * @returns {Object|null} Coordinator request or null when the target is stale.
      */
-    bakeAgentTarget(target) {
-        if (this.app.baking || target?.source !== RUN_TARGET_SOURCE.AGENT ||
+    bakeAgentTarget(target, signal=null) {
+        if (target?.source !== RUN_TARGET_SOURCE.AGENT ||
             !this.manager.runTargets.executionIsCurrent(
                 target,
                 this.getCurrentExecutionState(target)
@@ -1033,7 +1041,34 @@ class WorkerWaiter {
             !this.manager.runTargets.viewIsCurrent(target, this.manager.tabs.getViewState())) {
             return null;
         }
-        return this.#startBakeTarget(target);
+
+        const runRequest = this.manager.runs.ensure(target, {
+            owner: getRunOwner(RUN_MODE.AGENT),
+            mode: RUN_MODE.AGENT,
+            signal,
+            reuseFresh: true,
+        });
+        if (runRequest.decision !== RUN_DECISION.STARTED) return runRequest;
+        if (this.app.baking) {
+            this.manager.runs.settle(
+                runRequest.run.bakeId,
+                RUN_STATE.FAILED,
+                RUN_FAILURE_KIND.PROTOCOL
+            );
+            return runRequest;
+        }
+
+        try {
+            this.#startBakeTarget(target, runRequest);
+        } catch (err) {
+            this.manager.runs.settle(
+                runRequest.run.bakeId,
+                RUN_STATE.FAILED,
+                RUN_FAILURE_KIND.PROTOCOL
+            );
+            throw err;
+        }
+        return runRequest;
     }
 
 
@@ -1075,7 +1110,7 @@ class WorkerWaiter {
      * @param {Object} target - Current workspace execution target.
      * @returns {Promise<Object>|null} Run completion or null when another visible Run owns the lane.
      */
-    async #startBakeTarget(target) {
+    #startBakeTarget(target, preparedRequest=null) {
         if (this.app.baking) return null;
         const inputNums = target.inputTargets.map(inputTarget => inputTarget.inputTabId);
         log.debug(`Baking input list [${inputNums.join(",")}]`);
@@ -1097,7 +1132,7 @@ class WorkerWaiter {
             if (this.addChefWorker() === -1) break;
         }
 
-        const runRequest = this.app.bake(target);
+        const runRequest = this.app.bake(target, preparedRequest);
         if (!runRequest || runRequest.decision !== RUN_DECISION.STARTED) {
             this.inputs = [];
             this.inputNums = [];
@@ -1149,7 +1184,7 @@ class WorkerWaiter {
             );
             this.bakingComplete();
         }
-        return await runRequest.completion;
+        return runRequest.completion;
     }
 
     /**

@@ -141,8 +141,9 @@ class App {
      * Asks the ChefWorker to bake the current input using the current recipe.
      *
      * @param {Object} target - Immutable workspace execution target.
+     * @param {Object|null} [runRequest=null] - Optional prepared Run request.
      */
-    bake(target) {
+    bake(target, runRequest=null) {
         if (this.baking) return null;
 
         // Record which state version this bake is covering.
@@ -156,7 +157,8 @@ class App {
 
         return this.manager.worker.bake(
             this.getRecipeConfig(), // The configuration of the recipe
-            target
+            target,
+            runRequest
         );
     }
 
@@ -193,12 +195,11 @@ class App {
         if (this.baking) return;
 
         try {
-            await this.manager.input.flushActiveInput();
+            await this.manager.input.flushActiveInputForBake();
         } catch (err) {
             this.handleError(err, true);
             return;
         }
-        cancelDebounce("stateChange");
         if (this.baking) return;
 
         // Reset status using cancelBake
