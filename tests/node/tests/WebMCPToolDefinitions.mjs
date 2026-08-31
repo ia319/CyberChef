@@ -148,7 +148,7 @@ TestRegister.addApiTests([
             untrustedContentHint: false,
         });
         assert.deepStrictEqual(TOOL_CONTRACTS[TOOL_NAME.INSPECT_OUTPUT].annotations, {
-            readOnlyHint: true,
+            readOnlyHint: false,
             untrustedContentHint: true,
         });
     }),

@@ -24,6 +24,11 @@ const STATE_CHANGING_ANNOTATIONS = Object.freeze({
     untrustedContentHint: false,
 });
 
+const UNTRUSTED_STATE_CHANGING_ANNOTATIONS = Object.freeze({
+    readOnlyHint: false,
+    untrustedContentHint: true,
+});
+
 const READINESS_TOOL_CONTRACT = {
     title: "Check CyberChef WebMCP Readiness",
     description: "Reports the fixed WebMCP invocation status for this CyberChef page.",
@@ -243,7 +248,7 @@ const BAKE_RECIPE_SCHEMA = closedObject({
 const INSPECT_OUTPUT_SCHEMA = closedObject({
     bakeId: {
         type: "integer",
-        minimum: 0,
+        minimum: 1,
         maximum: Number.MAX_SAFE_INTEGER,
         description: "Completed Recipe run identifier returned by CyberChef.",
     },
@@ -287,9 +292,9 @@ const TOOL_CONTRACTS = {
     },
     [TOOL_NAME.INSPECT_OUTPUT]: {
         title: "Inspect CyberChef Output",
-        description: "Analyzes the current authorized Output locally and returns bounded derived signals for the completed run.",
+        description: "Analyzes the current authorized Output locally, consumes a bounded session analysis slot when new work starts, and returns bounded user-derived signals for the completed run.",
         inputSchema: INSPECT_OUTPUT_SCHEMA,
-        annotations: UNTRUSTED_READ_ONLY_ANNOTATIONS,
+        annotations: UNTRUSTED_STATE_CHANGING_ANNOTATIONS,
         requiresSession: true,
     },
 };
