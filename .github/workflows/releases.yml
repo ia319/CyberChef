@@ -17,6 +17,7 @@ env:
 
 jobs:
   main:
+    if: github.repository == 'gchq/CyberChef'
     permissions:
       packages: write
       contents: write
@@ -104,6 +105,7 @@ jobs:
           body: "See the [CHANGELOG](https://github.com/gchq/CyberChef/blob/master/CHANGELOG.md) and [commit messages](https://github.com/gchq/CyberChef/commits/master) for details."
 
   npm-publish:
+    if: github.repository == 'gchq/CyberChef'
     permissions:
       id-token: write
       contents: read
