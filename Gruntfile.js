@@ -51,6 +51,10 @@ module.exports = function (grunt) {
         "A task which runs all the UI tests in the tests directory. The prod task must already have been run.",
         ["connect:prod", "exec:browserTests"]);
 
+    grunt.registerTask("testwebmcp",
+        "Runs the WebMCP browser integration tests against a production build.",
+        ["connect:prod", "exec:webMCPBrowserTests"]);
+
     grunt.registerTask("testnodeconsumer",
         "A task which checks whether consuming CJS and ESM apps work with the CyberChef build",
         ["exec:setupNodeConsumers", "exec:testCJSNodeConsumer", "exec:testESMNodeConsumer", "exec:teardownNodeConsumers"]);
@@ -390,7 +394,10 @@ module.exports = function (grunt) {
                 sync: true
             },
             browserTests: {
-                command: "./node_modules/.bin/nightwatch --env prod"
+                command: "npx nightwatch --env prod"
+            },
+            webMCPBrowserTests: {
+                command: "npx nightwatch --env webmcp --test tests/browser/04_webmcp.js"
             },
             setupNodeConsumers: {
                 command: chainCommands([
