@@ -96,6 +96,8 @@ class Manager {
         this.bindings    = new BindingsWaiter(this.app, this);
         this.background  = new BackgroundWorkerWaiter(this.app, this);
         this.agentBake   = new AgentBakeService(this.app, this);
+        const runStateService = ACTIVE_BUILD_PROFILE.toolNames.includes(TOOL_NAME.BAKE_RECIPE) ?
+            this.agentBake : null;
         this.webmcp      = new WebMCPWaiter(
             document.modelContext,
             document,
@@ -103,7 +105,7 @@ class Manager {
             ACTIVE_BUILD_PROFILE,
             {
                 ...OPERATION_TOOL_HANDLERS,
-                ...createRecipeToolHandlers(this.recipe),
+                ...createRecipeToolHandlers(this.recipe, runStateService),
                 ...createBakeRecipeToolHandlers(this.agentBake),
             }
         );

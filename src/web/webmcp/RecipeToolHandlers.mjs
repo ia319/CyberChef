@@ -3,6 +3,7 @@ import {
     RECIPE_TRANSACTION_STATUS,
     RecipeTransactionError,
 } from "../recipe/RecipeTransaction.mjs";
+import {USER_BAKE_REQUIRED} from "./BakeResultContext.mjs";
 import {ToolExecutionError} from "./ToolExecutor.mjs";
 import {TOOL_NAME} from "./ToolDefinitions.mjs";
 import {
@@ -11,7 +12,6 @@ import {
 } from "./ToolResult.mjs";
 
 const RECIPE_STATE_DEFAULT_LIMIT = 20;
-const USER_BAKE_REQUIRED = "USER_BAKE_REQUIRED";
 
 
 /**
@@ -82,12 +82,31 @@ function createActionSummary(actions) {
  * Creates Recipe collaboration handlers around the shared Recipe service.
  *
  * @param {Object} recipeWaiter - Recipe state and transaction service.
+ * @param {Object|null} [runStateService=null] - Optional active Run state service.
  * @returns {Object} Handlers keyed by formal tool name.
  */
-function createRecipeToolHandlers(recipeWaiter) {
+function createRecipeToolHandlers(recipeWaiter, runStateService=null) {
     if (!recipeWaiter || typeof recipeWaiter.getReadProjection !== "function" ||
-        typeof recipeWaiter.applyAgentPatch !== "function") {
+        typeof recipeWaiter.applyAgentPatch !== "function" ||
+        runStateService !== null && typeof runStateService.getActiveState !== "function") {
         throw new TypeError("Recipe tool handlers require the Recipe service");
+    }
+
+    /**
+     * Returns the current profile's authorized Recipe and Run state fields.
+     *
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @param {number} recipeRevision - Current Recipe revision.
+     * @returns {Object} Profile-specific content-free state.
+     */
+    function createCollaborationState(invocation, recipeRevision) {
+        return {
+            sessionEpoch: invocation.sessionEpoch,
+            recipeRevision,
+            ...(runStateService ? runStateService.getActiveState(recipeRevision) : {
+                executionCapability: USER_BAKE_REQUIRED,
+            }),
+        };
     }
 
     /**
@@ -110,11 +129,7 @@ function createRecipeToolHandlers(recipeWaiter) {
             requestedSteps = projection.steps
                 .slice(offset, offset + limit)
                 .map(createRecipeStepState),
-            state = {
-                sessionEpoch: invocation.sessionEpoch,
-                recipeRevision: projection.recipeRevision,
-                executionCapability: USER_BAKE_REQUIRED,
-            };
+            state = createCollaborationState(invocation, projection.recipeRevision);
         let stepCount = requestedSteps.length,
             data;
 
@@ -166,11 +181,7 @@ function createRecipeToolHandlers(recipeWaiter) {
                     stepIds: result.insertedSteps.map(step => step.stepId),
                 },
             },
-            state = {
-                sessionEpoch: invocation.sessionEpoch,
-                recipeRevision: result.recipeRevision,
-                executionCapability: USER_BAKE_REQUIRED,
-            };
+            state = createCollaborationState(invocation, result.recipeRevision);
 
         if (!isSuccessResultWithinBudget(data, state)) {
             throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);

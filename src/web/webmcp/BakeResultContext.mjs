@@ -1,4 +1,5 @@
 const AGENT_BAKE_CAPABILITY = "AGENT_BAKE_AVAILABLE";
+const USER_BAKE_REQUIRED = "USER_BAKE_REQUIRED";
 const RECIPE_STEP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const INPUT_GENERATION_PATTERN = /^\d+:\d+$/;
 const RECIPE_STEP_ID_MAX_CHARS = 64;
@@ -150,6 +151,7 @@ function createBakeResultState(sessionEpoch, result) {
 export {
     AGENT_BAKE_CAPABILITY,
     BAKE_STATE_FIELDS,
+    USER_BAKE_REQUIRED,
     createBakeResultState,
     isBakeErrorContext,
 };

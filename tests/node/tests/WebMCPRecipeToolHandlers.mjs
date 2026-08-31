@@ -72,6 +72,40 @@ const executeRecipeState = async (projection, input, epoch=19) => {
 
 
 TestRegister.addApiTests([
+    it("WebMCPRecipeToolHandlers: should include candidate Run state when available", () => {
+        const recipeWaiter = {
+                getReadProjection: () => createProjection(),
+                applyAgentPatch: () => {
+                    throw new Error("Recipe patch is unavailable in this fixture");
+                },
+            },
+            runStateService = {
+                getActiveState: recipeRevision => ({
+                    executionCapability: "AGENT_BAKE_AVAILABLE",
+                    inputTabId: 1,
+                    outputTabId: 1,
+                    outputVersion: recipeRevision,
+                }),
+            },
+            handler = createRecipeToolHandlers(
+                recipeWaiter,
+                runStateService
+            )[TOOL_NAME.GET_RECIPE_STATE],
+            result = handler({}, {
+                sessionEpoch: 21,
+                checkpoint: () => {},
+            });
+
+        assert.deepStrictEqual(result.state, {
+            sessionEpoch: 21,
+            recipeRevision: 7,
+            executionCapability: "AGENT_BAKE_AVAILABLE",
+            inputTabId: 1,
+            outputTabId: 1,
+            outputVersion: 7,
+        });
+    }),
+
     it("WebMCPRecipeToolHandlers: should return revision-bound redacted Recipe state", async () => {
         const result = await executeRecipeState(createProjection(), {
                 expectedRevision: 7,

@@ -10,6 +10,9 @@ import {
 import {outputProvenanceMatchesTarget} from "../run/OutputProvenance.mjs";
 import {AGENT_BAKE_ERROR_CODE, AgentBakeError} from "./AgentBakeError.mjs";
 import {
+    AGENT_BAKE_CAPABILITY,
+} from "./BakeResultContext.mjs";
+import {
     PREFLIGHT_ISSUE_CODE,
     preflightOperationRecipe,
 } from "./OperationPreflight.mjs";
@@ -94,6 +97,7 @@ class AgentBakeService {
             typeof manager.recipe.getConfig !== "function" ||
             typeof manager.recipe.getReadProjection !== "function" ||
             typeof manager.input.flushActiveInputForBake !== "function" ||
+            typeof manager.input.getSynchronizedInputState !== "function" ||
             typeof manager.output.getOutputState !== "function" ||
             typeof manager.output.getOutputProvenance !== "function" ||
             typeof manager.output.outputIsFresh !== "function" ||
@@ -108,6 +112,75 @@ class AgentBakeService {
         }
         this.#app = app;
         this.#manager = manager;
+    }
+
+    /**
+     * Returns current active target identities without synchronizing or running user data.
+     *
+     * @param {number} expectedRevision - Recipe revision already authorized by the handler.
+     * @returns {Object} Execution capability and available content-free active state.
+     */
+    getActiveState(expectedRevision) {
+        if (this.#manager.recipe.getRecipeRevision() !== expectedRevision) {
+            throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_RECIPE);
+        }
+
+        const viewState = this.#manager.tabs.getViewState(),
+            inputState = this.#manager.input.getSynchronizedInputState(
+                viewState.activeInputTabId
+            ),
+            outputState = this.#manager.output.getOutputState(viewState.activeOutputTabId);
+        if (!inputState || !outputState || !viewState.tabsSynchronized) {
+            return Object.freeze({executionCapability: AGENT_BAKE_CAPABILITY});
+        }
+
+        let target;
+        try {
+            target = this.#manager.runTargets.requireActiveTarget(
+                this.#manager.runTargets.capture({
+                    source: RUN_TARGET_SOURCE.AGENT,
+                    recipeRevisionAtStart: expectedRevision,
+                    inputStates: [inputState],
+                    outputStates: [outputState],
+                    ...viewState,
+                    executionOptions: this.#app.options,
+                    progress: 0,
+                    step: false,
+                })
+            );
+        } catch (err) {
+            if (err instanceof RunTargetError && [
+                RUN_TARGET_ERROR_CODE.TAB_MISMATCH,
+                RUN_TARGET_ERROR_CODE.TARGET_UNAVAILABLE,
+            ].includes(err.code)) {
+                return Object.freeze({executionCapability: AGENT_BAKE_CAPABILITY});
+            }
+            throw err;
+        }
+        if (!this.#targetIsCurrent(target)) {
+            return Object.freeze({executionCapability: AGENT_BAKE_CAPABILITY});
+        }
+
+        const inputTarget = target.inputTargets[0],
+            provenance = this.#manager.output.getOutputProvenance(inputTarget.outputTabId),
+            boundTarget = provenance?.bakeId ?
+                Object.freeze({...target, bakeId: provenance.bakeId}) : null,
+            currentProvenance = boundTarget &&
+                outputProvenanceMatchesTarget(provenance, boundTarget, inputTarget.inputTabId) &&
+                provenance.outputVersion === outputState.outputVersion ? provenance : null;
+        return Object.freeze({
+            executionCapability: AGENT_BAKE_CAPABILITY,
+            inputTabId: inputTarget.inputTabId,
+            inputGeneration: inputTarget.inputGeneration,
+            inputRevision: inputTarget.inputRevision,
+            executionOptionsVersion: target.executionOptionsVersion,
+            viewVersion: target.viewVersion,
+            outputTabId: inputTarget.outputTabId,
+            outputGeneration: inputTarget.outputGeneration,
+            outputVersion: outputState.outputVersion,
+            bakeId: currentProvenance?.bakeId ?? null,
+            terminalState: currentProvenance?.terminalState ?? null,
+        });
     }
 
     /**

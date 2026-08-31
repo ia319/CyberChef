@@ -67,6 +67,8 @@ function createFixture(options={}) {
                     evidence.flushCount++;
                     return inputState;
                 },
+                getSynchronizedInputState: () => options.inputSynchronized === false ?
+                    null : inputState,
             },
             output: {
                 getOutputState: () => Object.freeze({
@@ -150,6 +152,29 @@ function createFixture(options={}) {
 
 
 TestRegister.addApiTests([
+    it("WebMCPAgentBakeService: should expose only available active state", () => {
+        const {service} = createFixture(),
+            state = service.getActiveState(7);
+        assert.deepStrictEqual(state, {
+            executionCapability: "AGENT_BAKE_AVAILABLE",
+            inputTabId: 1,
+            inputGeneration: "1:1",
+            inputRevision: 2,
+            executionOptionsVersion: 0,
+            viewVersion: 4,
+            outputTabId: 1,
+            outputGeneration: 3,
+            outputVersion: 0,
+            bakeId: null,
+            terminalState: null,
+        });
+
+        const pending = createFixture({inputSynchronized: false});
+        assert.deepStrictEqual(pending.service.getActiveState(7), {
+            executionCapability: "AGENT_BAKE_AVAILABLE",
+        });
+    }),
+
     it("WebMCPAgentBakeService: should reuse, join, and start exact active targets", async () => {
         for (const decision of [
             RUN_DECISION.ALREADY_FRESH,
