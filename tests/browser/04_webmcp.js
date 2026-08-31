@@ -28,6 +28,7 @@ module.exports = {
                     }
                     return typeof result === "string" ? JSON.parse(result) : result;
                 };
+
             });
     },
 
@@ -303,6 +304,175 @@ module.exports = {
             browser.assert.strictEqual(value.config.length, 1);
             browser.assert.strictEqual(value.config[0].op, "From Hex");
             browser.assert.strictEqual(value.config[0].disabled, true);
+        });
+    },
+
+    "Stop cancels an exclusive Agent Run": browser => {
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager,
+                worker = manager.worker,
+                inputCanary = "STOPPED_AGENT_INPUT_CANARY",
+                originalRequestInput = worker.requestInputForBake;
+            try {
+                manager.controls.setAutoBake(false);
+                app.setRecipeConfig([{op: "To Hex", args: ["Space", 0]}]);
+                const inputView = manager.input.inputEditorView;
+                inputView.dispatch({
+                    changes: {
+                        from: 0,
+                        to: inputView.state.doc.length,
+                        insert: inputCanary,
+                    },
+                });
+                await manager.input.flushActiveInputForBake();
+
+                const tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    bakeTool = tools.find(tool => tool.name === "bake_recipe"),
+                    state = await window.__invokeWebMCPTool(stateTool, {});
+                let queueStarted;
+                const queued = new Promise(resolve => {
+                    queueStarted = resolve;
+                });
+                worker.requestInputForBake = inputNum => queueStarted(inputNum);
+
+                const invocation = window.__invokeWebMCPTool(bakeTool, {
+                    expectedRevision: state.state.recipeRevision,
+                });
+                await queued;
+                const bakeId = worker.bakeId,
+                    startedRun = manager.runs.getRun(bakeId);
+
+                document.getElementById("webmcp-stop").click();
+                const result = await invocation;
+                let cancelledRun;
+                for (let attempt = 0; attempt < 100; attempt++) {
+                    const run = manager.runs.getRun(bakeId);
+                    if (run?.terminalState === "cancelled") {
+                        cancelledRun = run;
+                        break;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                if (!cancelledRun) {
+                    throw new Error("Timed out waiting for the cancelled Agent Run");
+                }
+
+                done({
+                    result,
+                    owner: startedRun.owner,
+                    initialState: startedRun.state,
+                    terminalState: cancelledRun.terminalState,
+                    sessionState: manager.webmcp.session.getState().state,
+                    baking: app.baking,
+                    canaryExposed: JSON.stringify(result).includes(inputCanary),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                worker.requestInputForBake = originalRequestInput;
+                if (app.baking) worker.cancelBake(true, false);
+                manager.controls.setAutoBake(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.result.error.code, "SESSION_ENDED");
+            browser.assert.strictEqual(value.owner, "agent");
+            browser.assert.strictEqual(value.initialState, "queued");
+            browser.assert.strictEqual(value.terminalState, "cancelled");
+            browser.assert.strictEqual(value.sessionState, "off");
+            browser.assert.strictEqual(value.baking, false);
+            browser.assert.strictEqual(value.canaryExposed, false);
+        });
+    },
+
+    "Stop preserves a shared user Run": browser => {
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager,
+                worker = manager.worker,
+                inputCanary = "SHARED_USER_INPUT_CANARY",
+                originalRequestInput = worker.requestInputForBake,
+                originalEnsure = manager.runs.ensure;
+            try {
+                manager.controls.setAutoBake(false);
+                app.setRecipeConfig([{op: "To Base64", args: ["A-Za-z0-9+/="]}]);
+                const inputView = manager.input.inputEditorView;
+                inputView.dispatch({
+                    changes: {
+                        from: 0,
+                        to: inputView.state.doc.length,
+                        insert: inputCanary,
+                    },
+                });
+                await manager.input.flushActiveInputForBake();
+
+                let queueStarted, agentJoined;
+                const queued = new Promise(resolve => {
+                        queueStarted = resolve;
+                    }),
+                    joined = new Promise(resolve => {
+                        agentJoined = resolve;
+                    });
+                worker.requestInputForBake = inputNum => queueStarted(inputNum);
+                manager.runs.ensure = function(target, request) {
+                    const result = originalEnsure.call(this, target, request);
+                    if (request.owner === "agent") agentJoined(result.decision);
+                    return result;
+                };
+
+                await manager.input.bakeAll();
+                await queued;
+                const bakeId = worker.bakeId,
+                    userRun = manager.runs.getRun(bakeId),
+                    tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    bakeTool = tools.find(tool => tool.name === "bake_recipe"),
+                    state = await window.__invokeWebMCPTool(stateTool, {}),
+                    invocation = window.__invokeWebMCPTool(bakeTool, {
+                        expectedRevision: state.state.recipeRevision,
+                    }),
+                    decision = await joined;
+
+                document.getElementById("webmcp-stop").click();
+                const result = await invocation;
+                const runAfterStop = manager.runs.getRun(bakeId),
+                    bakingAfterStop = app.baking;
+
+                worker.cancelBake(true, false);
+                done({
+                    result,
+                    decision,
+                    owner: userRun.owner,
+                    runStateAfterStop: runAfterStop.state,
+                    terminalStateAfterStop: runAfterStop.terminalState,
+                    bakingAfterStop,
+                    sessionState: manager.webmcp.session.getState().state,
+                    bakingAfterCleanup: app.baking,
+                    canaryExposed: JSON.stringify(result).includes(inputCanary),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                manager.runs.ensure = originalEnsure;
+                worker.requestInputForBake = originalRequestInput;
+                if (app.baking) worker.cancelBake(true, false);
+                manager.controls.setAutoBake(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.result.error.code, "SESSION_ENDED");
+            browser.assert.strictEqual(value.decision, "joined");
+            browser.assert.strictEqual(value.owner, "user");
+            browser.assert.strictEqual(value.runStateAfterStop, "queued");
+            browser.assert.strictEqual(value.terminalStateAfterStop, null);
+            browser.assert.strictEqual(value.bakingAfterStop, true);
+            browser.assert.strictEqual(value.sessionState, "off");
+            browser.assert.strictEqual(value.bakingAfterCleanup, false);
+            browser.assert.strictEqual(value.canaryExposed, false);
         });
     },
 
