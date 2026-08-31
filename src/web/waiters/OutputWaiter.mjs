@@ -684,6 +684,28 @@ class OutputWaiter {
     }
 
     /**
+     * Marks only the Outputs that still belong to a stale Run target.
+     *
+     * @param {Object|null} target - Stale workspace execution target.
+     * @returns {void}
+     */
+    markRunTargetStale(target) {
+        if (!target?.inputTargets) return;
+        let changed = false;
+        for (const inputTarget of target.inputTargets) {
+            const output = this.outputs[inputTarget.outputTabId];
+            if (!output || output.outputGeneration !== inputTarget.outputGeneration) continue;
+            output.status = "stale";
+            this.displayTabInfo(inputTarget.outputTabId);
+            changed = true;
+        }
+        if (changed) {
+            this.outputRenderGeneration++;
+            this.manager.controls.showStaleIndicator();
+        }
+    }
+
+    /**
      * Updates the stored Bake and Recipe identity for an Output.
      *
      * @param {number} bakeId

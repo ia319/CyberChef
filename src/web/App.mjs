@@ -5,6 +5,7 @@
  */
 
 import Utils, {cancelDebounce, debounce} from "../core/Utils.mjs";
+import {RUN_TARGET_SOURCE} from "./run/RunTargetBuilder.mjs";
 import {fromBase64} from "../core/lib/Base64.mjs";
 import Manager from "./Manager.mjs";
 import HTMLCategory from "./HTMLCategory.mjs";
@@ -107,7 +108,7 @@ class App {
             document.body.classList.remove("loaded");
 
             // Bake initial input
-            this.manager.input.bakeAll();
+            this.manager.input.bakeAll(RUN_TARGET_SOURCE.INITIAL);
         }.bind(this), 1000);
 
         // Clear the loading message interval
@@ -139,10 +140,9 @@ class App {
     /**
      * Asks the ChefWorker to bake the current input using the current recipe.
      *
-     * @param {boolean} [step] - Set to true if we should only execute one operation instead of the
-     *   whole recipe.
+     * @param {Object} target - Immutable workspace execution target.
      */
-    bake(step=false) {
+    bake(target) {
         if (this.baking) return;
 
         // Record which state version this bake is covering.
@@ -156,9 +156,7 @@ class App {
 
         this.manager.worker.bake(
             this.getRecipeConfig(), // The configuration of the recipe
-            this.options,           // Options set by the user
-            this.progress,          // The current position in the recipe
-            step                    // Whether or not to take one step or execute the whole recipe
+            target
         );
     }
 

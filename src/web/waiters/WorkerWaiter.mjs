@@ -13,6 +13,10 @@ import {
     WORKER_ACTION_SCOPE,
     getWorkerActionPolicy,
 } from "../run/WorkerActionPolicy.mjs";
+import {
+    RUN_TARGET_ERROR_CODE,
+    RunTargetError,
+} from "../run/RunTargetBuilder.mjs";
 
 const MAX_PENDING_HIGHLIGHT_REQUESTS = 64;
 
@@ -185,7 +189,67 @@ class WorkerWaiter {
     }
 
     /**
-     * Checks whether one Bake target still belongs to the visible Recipe.
+     * Captures the identities and execution settings for an InputWorker Bake request.
+     *
+     * @param {Object} inputData - Content-free InputWorker Bake request.
+     * @returns {Object} Immutable workspace target.
+     * @throws {RunTargetError} When the request no longer identifies a complete workspace target.
+     */
+    captureWorkspaceTarget(inputData) {
+        if (!Array.isArray(inputData?.nums) || !Array.isArray(inputData?.inputStates) ||
+            inputData.nums.length < 1 || inputData.nums.length !== inputData.inputStates.length ||
+            inputData.nums.some((inputNum, index) =>
+                inputNum !== inputData.inputStates[index]?.inputNum
+            )) {
+            throw new RunTargetError(
+                RUN_TARGET_ERROR_CODE.INVALID_TARGET,
+                "Input target list is invalid"
+            );
+        }
+
+        const outputStates = inputData.nums.map(inputNum =>
+            this.manager.output.getOutputState(inputNum)
+        );
+        if (outputStates.some(outputState => outputState === null)) {
+            throw new RunTargetError(
+                RUN_TARGET_ERROR_CODE.TARGET_UNAVAILABLE,
+                "A matching Output target is unavailable"
+            );
+        }
+
+        return this.manager.runTargets.capture({
+            source: inputData.source,
+            recipeRevisionAtStart: this.manager.recipe.getRecipeRevision(),
+            inputStates: inputData.inputStates,
+            outputStates,
+            ...this.manager.tabs.getViewState(),
+            executionOptions: this.app.options,
+            progress: inputData.progress,
+            step: inputData.step,
+        });
+    }
+
+    /**
+     * Reads the content-free identities needed to validate a captured target.
+     *
+     * @param {Object} target - Captured or bound workspace target.
+     * @returns {Object} Current execution identity state.
+     */
+    getCurrentExecutionState(target) {
+        return {
+            recipeRevision: this.manager.recipe.getRecipeRevision(),
+            inputStates: target.inputTargets.map(inputTarget =>
+                this.manager.input.getSynchronizedInputState(inputTarget.inputTabId)
+            ),
+            outputStates: target.inputTargets.map(inputTarget =>
+                this.manager.output.getOutputState(inputTarget.outputTabId)
+            ),
+            executionOptions: this.app.options,
+        };
+    }
+
+    /**
+     * Checks whether one Bake target still belongs to the current workspace execution state.
      *
      * @param {Object|null} target - Captured Bake target.
      * @returns {boolean} Whether the target is current.
@@ -193,8 +257,10 @@ class WorkerWaiter {
     isCurrentBakeTarget(target) {
         return !!target && !!this.bakeTarget &&
             target.bakeId === this.bakeTarget.bakeId &&
-            target.recipeRevisionAtStart === this.bakeTarget.recipeRevisionAtStart &&
-            target.recipeRevisionAtStart === this.manager.recipe.getRecipeRevision();
+            this.manager.runTargets.executionIsCurrent(
+                target,
+                this.getCurrentExecutionState(target)
+            );
     }
 
     /**
@@ -205,10 +271,55 @@ class WorkerWaiter {
      * @returns {boolean} Whether the message matches the assigned task.
      */
     matchesWorkerRun(data, workerObj) {
-        const target = workerObj?.runTarget;
+        const target = workerObj?.runTarget,
+            inputTarget = target?.inputTargets?.[0];
         return !!target && data?.bakeId === target.bakeId &&
             data?.recipeRevisionAtStart === target.recipeRevisionAtStart &&
-            data?.inputNum === target.inputNum;
+            data?.inputNum === inputTarget?.inputTabId;
+    }
+
+    /**
+     * Checks whether an InputWorker response matches its captured Input identity.
+     *
+     * @param {Object} inputData - InputWorker queue response.
+     * @returns {boolean} Whether the response belongs to the captured target.
+     */
+    matchesQueuedInput(inputData) {
+        const inputTarget = this.manager.runTargets.getInputTarget(
+            this.bakeTarget,
+            inputData?.inputNum
+        );
+        return !!inputTarget &&
+            inputData.inputGeneration === inputTarget.inputGeneration &&
+            inputData.inputRevision === inputTarget.inputRevision;
+    }
+
+    /**
+     * Requests one captured Input from the InputWorker for the current Bake.
+     *
+     * @param {number} inputNum - Captured Input number.
+     * @returns {void}
+     * @throws {RunTargetError} When the Input is absent from the current Bake target.
+     */
+    requestInputForBake(inputNum) {
+        const inputTarget = this.manager.runTargets.getInputTarget(this.bakeTarget, inputNum);
+        if (!inputTarget) {
+            throw new RunTargetError(
+                RUN_TARGET_ERROR_CODE.TARGET_UNAVAILABLE,
+                "The requested Input target is unavailable"
+            );
+        }
+        this.manager.input.inputWorker.postMessage({
+            action: "bakeNext",
+            data: {
+                inputNum,
+                inputGeneration: inputTarget.inputGeneration,
+                inputRevision: inputTarget.inputRevision,
+                bakeId: this.bakeTarget.bakeId,
+                recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
+            }
+        });
+        this.loadingOutputs++;
     }
 
     /**
@@ -228,6 +339,7 @@ class WorkerWaiter {
         }
         this.setBakingStatus(false);
         this.totalOutputs = 0;
+        this.manager.output.markRunTargetStale(this.bakeTarget);
         this.bakeTarget = null;
         document.getElementById("bake").style.background = "";
     }
@@ -446,8 +558,10 @@ class WorkerWaiter {
      * Cancels the current bake making it possible to autobake again
      */
     cancelBakeForAutoBake() {
+        const staleTarget = this.bakeTarget;
         if (this.totalOutputs > 1) {
             this.cancelBake();
+            this.manager.output.markRunTargetStale(staleTarget);
         } else {
             // In this case the UI changes can be skipped
 
@@ -461,6 +575,7 @@ class WorkerWaiter {
             this.inputNums = [];
             this.totalOutputs = 0;
             this.loadingOutputs = 0;
+            this.manager.output.markRunTargetStale(staleTarget);
             this.bakeTarget = null;
         }
     }
@@ -609,11 +724,10 @@ class WorkerWaiter {
         this.manager.output.updateOutputStatus("baking", nextInput.inputNum);
 
         this.chefWorkers[workerIdx].inputNum = nextInput.inputNum;
-        this.chefWorkers[workerIdx].runTarget = Object.freeze({
-            bakeId: this.bakeTarget.bakeId,
-            recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
-            inputNum: nextInput.inputNum,
-        });
+        this.chefWorkers[workerIdx].runTarget = this.manager.runTargets.forInput(
+            this.bakeTarget,
+            nextInput.inputNum
+        );
         const input = nextInput.input,
             recipeConfig = this.recipeConfig;
 
@@ -641,7 +755,7 @@ class WorkerWaiter {
             data: {
                 input: input,
                 recipeConfig: recipeConfig,
-                options: this.options,
+                options: this.bakeTarget.executionOptions,
                 inputNum: nextInput.inputNum,
                 bakeId: this.bakeTarget.bakeId,
                 recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
@@ -649,39 +763,27 @@ class WorkerWaiter {
         }, transferable);
 
         if (this.inputNums.length > 0) {
-            this.manager.input.inputWorker.postMessage({
-                action: "bakeNext",
-                data: {
-                    inputNum: this.inputNums.splice(0, 1)[0],
-                    bakeId: this.bakeTarget.bakeId,
-                    recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
-                }
-            });
-            this.loadingOutputs++;
+            this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
         }
     }
 
     /**
      * Bakes the current input using the current recipe.
      *
-     * @param {Object[]} recipeConfig
-     * @param {Object} options
-     * @param {number} progress
-     * @param {boolean} step
+     * @param {Object[]} recipeConfig - Recipe snapshot.
+     * @param {Object} target - Immutable workspace execution target.
      */
-    bake(recipeConfig, options, progress, step) {
+    bake(recipeConfig, target) {
+        const boundTarget = this.manager.runTargets.bindBakeId(target, this.bakeId + 1);
+        this.bakeId = boundTarget.bakeId;
+        this.bakeTarget = boundTarget;
+        this.recipeConfig = recipeConfig;
+        this.progress = boundTarget.progress;
+        this.step = boundTarget.step;
+
         this.setBakingStatus(true);
         this.manager.recipe.updateBreakpointIndicator(false);
         this.bakeStartTime = Date.now();
-        this.bakeId++;
-        this.bakeTarget = Object.freeze({
-            bakeId: this.bakeId,
-            recipeRevisionAtStart: this.manager.recipe.getRecipeRevision(),
-        });
-        this.recipeConfig = recipeConfig;
-        this.options = options;
-        this.progress = progress;
-        this.step = step;
 
         this.displayProgress();
     }
@@ -699,7 +801,8 @@ class WorkerWaiter {
         if (!this.bakeTarget || inputData.bakeId !== this.bakeTarget.bakeId ||
             inputData.recipeRevisionAtStart !== this.bakeTarget.recipeRevisionAtStart) return;
         this.loadingOutputs--;
-        if (!this.app.baking || !this.isCurrentBakeTarget(this.bakeTarget)) {
+        if (!this.app.baking || !this.matchesQueuedInput(inputData) ||
+            !this.isCurrentBakeTarget(this.bakeTarget)) {
             this.dropStaleBakeQueue();
             this.completeStaleBakeIfIdle();
             return;
@@ -720,7 +823,8 @@ class WorkerWaiter {
         if (!this.bakeTarget || inputData.bakeId !== this.bakeTarget.bakeId ||
             inputData.recipeRevisionAtStart !== this.bakeTarget.recipeRevisionAtStart) return;
         this.loadingOutputs--;
-        if (this.app.baking && this.isCurrentBakeTarget(this.bakeTarget)) {
+        if (this.app.baking && this.matchesQueuedInput(inputData) &&
+            this.isCurrentBakeTarget(this.bakeTarget)) {
             this.manager.output.updateOutputBakeTarget(
                 this.bakeTarget.bakeId,
                 this.bakeTarget.recipeRevisionAtStart,
@@ -731,15 +835,7 @@ class WorkerWaiter {
             if (this.inputNums.length === 0) return;
 
             // Load the next input
-            this.manager.input.inputWorker.postMessage({
-                action: "bakeNext",
-                data: {
-                    inputNum: this.inputNums.splice(0, 1)[0],
-                    bakeId: this.bakeTarget.bakeId,
-                    recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
-                }
-            });
-            this.loadingOutputs++;
+            this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
         } else {
             this.dropStaleBakeQueue();
             this.completeStaleBakeIfIdle();
@@ -755,12 +851,28 @@ class WorkerWaiter {
      * @param {number} inputData.progress - The current progress through the recipe. Used when stepping
      */
     async bakeInputs(inputData) {
+        if (this.app.baking) return;
+        let target;
+        try {
+            target = this.captureWorkspaceTarget(inputData);
+            if (!this.manager.runTargets.executionIsCurrent(
+                target,
+                this.getCurrentExecutionState(target)
+            )) {
+                throw new RunTargetError(
+                    RUN_TARGET_ERROR_CODE.TARGET_UNAVAILABLE,
+                    "Workspace target changed before execution"
+                );
+            }
+        } catch (err) {
+            this.app.handleError(err, true);
+            debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["bake"])();
+            return;
+        }
         log.debug(`Baking input list [${inputData.nums.join(",")}]`);
 
         return await new Promise(resolve => {
-            if (this.app.baking) return;
             const inputNums = inputData.nums.filter(n => n > 0);
-            const step = inputData.step;
 
             // Use cancelBake to clear out the inputs
             this.cancelBake(true, false);
@@ -780,7 +892,7 @@ class WorkerWaiter {
                 if (this.addChefWorker() === -1) break;
             }
 
-            this.app.bake(step);
+            this.app.bake(target);
 
             for (let i = 0; i < this.inputNums.length; i++) {
                 this.manager.output.updateOutputMessage(`Input ${inputNums[i]} has not been baked yet.`, inputNums[i], false);
@@ -793,15 +905,7 @@ class WorkerWaiter {
             }
             for (let i = 0; i < numBakes; i++) {
                 this.manager.timing.recordTime("trigger", this.inputNums[0]);
-                this.manager.input.inputWorker.postMessage({
-                    action: "bakeNext",
-                    data: {
-                        inputNum: this.inputNums.splice(0, 1)[0],
-                        bakeId: this.bakeTarget.bakeId,
-                        recipeRevisionAtStart: this.bakeTarget.recipeRevisionAtStart,
-                    }
-                });
-                this.loadingOutputs++;
+                this.requestInputForBake(this.inputNums.splice(0, 1)[0]);
             }
             if (numBakes === 0) this.bakingComplete();
         });

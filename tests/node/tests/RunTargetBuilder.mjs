@@ -123,6 +123,27 @@ TestRegister.addApiTests([
         }), false);
     }),
 
+    it("RunTargetBuilder: should detect execution identity changes", () => {
+        const builder = new RunTargetBuilder(),
+            target = builder.capture(createState()),
+            current = {
+                recipeRevision: 4,
+                inputStates: createState().inputStates,
+                outputStates: createState().outputStates,
+                executionOptions: {wordWrap: false},
+            };
+
+        assert.equal(builder.executionIsCurrent(target, current), true);
+        [
+            {recipeRevision: 5},
+            {inputStates: [{...current.inputStates[0], inputRevision: 4}]},
+            {inputStates: [{...current.inputStates[0], inputGeneration: "1:3"}]},
+            {outputStates: [{...current.outputStates[0], outputGeneration: 8}]},
+        ].forEach(change => {
+            assert.equal(builder.executionIsCurrent(target, {...current, ...change}), false);
+        });
+    }),
+
     it("RunTargetBuilder: should reject missing and duplicate identities", () => {
         const builder = new RunTargetBuilder();
 

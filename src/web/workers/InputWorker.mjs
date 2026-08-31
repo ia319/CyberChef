@@ -10,6 +10,7 @@
 
 import Utils from "../../core/Utils.mjs";
 import loglevelMessagePrefix from "loglevel-message-prefix";
+import {RUN_TARGET_SOURCE} from "../run/RunTargetBuilder.mjs";
 
 loglevelMessagePrefix(log, {
     prefixes: [],
@@ -86,10 +87,10 @@ self.addEventListener("message", function(e) {
             self.updateInputProgress(r.data);
             break;
         case "bakeAll":
-            self.bakeAllInputs();
+            self.bakeAllInputs(r.data);
             break;
         case "bakeNext":
-            self.bakeInput(r.data.inputNum, r.data.bakeId, r.data.recipeRevisionAtStart);
+            self.bakeInput(r.data);
             break;
         case "getLoadProgress":
             self.getLoadProgress(r.data);
@@ -250,6 +251,8 @@ self.autoBake = function(inputNum, progress, step=false) {
             action: "bakeInputs",
             data: {
                 nums: [parseInt(inputNum, 10)],
+                inputStates: [self.getInputStateData(inputNum)],
+                source: step ? RUN_TARGET_SOURCE.STEP : RUN_TARGET_SOURCE.AUTO,
                 step: step,
                 progress: progress
             }
@@ -261,7 +264,7 @@ self.autoBake = function(inputNum, progress, step=false) {
  * Fired when we want to bake all inputs (bake button clicked)
  * Sends a list of inputNums to the workerwaiter
  */
-self.bakeAllInputs = function() {
+self.bakeAllInputs = function(request={}) {
     const inputNums = Object.keys(self.inputs);
 
     const nums = inputNums
@@ -272,6 +275,8 @@ self.bakeAllInputs = function() {
         action: "bakeInputs",
         data: {
             nums: nums,
+            inputStates: nums.map(self.getInputStateData),
+            source: request?.source ?? RUN_TARGET_SOURCE.MANUAL,
             step: false,
             progress: 0
         }
@@ -281,15 +286,19 @@ self.bakeAllInputs = function() {
 /**
  * Gets the data for the provided inputNum and sends it to the WorkerWaiter
  *
- * @param {number} inputNum
- * @param {number} bakeId
- * @param {number} recipeRevisionAtStart
+ * @param {Object} request - Bake queue request and expected Input identity.
  */
-self.bakeInput = function(inputNum, bakeId, recipeRevisionAtStart) {
+self.bakeInput = function(request) {
+    const inputNum = request.inputNum,
+        bakeId = request.bakeId,
+        recipeRevisionAtStart = request.recipeRevisionAtStart,
+        inputState = self.getInputStateData(inputNum);
     const inputObj = self.inputs[inputNum];
     if (inputObj === null ||
         inputObj === undefined ||
-        inputObj.status !== "loaded") {
+        inputObj.status !== "loaded" ||
+        inputState?.inputGeneration !== request.inputGeneration ||
+        inputState?.inputRevision !== request.inputRevision) {
 
         self.postMessage({
             action: "queueInputError",
@@ -297,6 +306,8 @@ self.bakeInput = function(inputNum, bakeId, recipeRevisionAtStart) {
                 inputNum: inputNum,
                 bakeId: bakeId,
                 recipeRevisionAtStart: recipeRevisionAtStart,
+                inputGeneration: inputState?.inputGeneration ?? null,
+                inputRevision: inputState?.inputRevision ?? null,
             }
         });
         return;
@@ -309,6 +320,8 @@ self.bakeInput = function(inputNum, bakeId, recipeRevisionAtStart) {
             inputNum: inputNum,
             bakeId: bakeId,
             recipeRevisionAtStart: recipeRevisionAtStart,
+            inputGeneration: inputState.inputGeneration,
+            inputRevision: inputState.inputRevision,
         }
     });
 };

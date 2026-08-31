@@ -44,6 +44,7 @@ import {statusBar} from "../utils/statusBar.mjs";
 import {fileDetailsPanel} from "../utils/fileDetails.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
 import {InputSyncController} from "../run/InputSyncController.mjs";
+import {RUN_TARGET_SOURCE} from "../run/RunTargetBuilder.mjs";
 
 
 /**
@@ -622,9 +623,10 @@ class InputWaiter {
     /**
      * Synchronizes the active editor before requesting a Bake for all loaded Inputs.
      *
+     * @param {string} [source=RUN_TARGET_SOURCE.MANUAL] - Bake request source.
      * @returns {Promise<Object|null>} Synchronized active Input identity or null on failure.
      */
-    async bakeAll() {
+    async bakeAll(source=RUN_TARGET_SOURCE.MANUAL) {
         this.app.progress = 0;
         debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["loading"])();
         let inputState;
@@ -638,6 +640,7 @@ class InputWaiter {
         cancelDebounce("stateChange");
         this.inputWorker.postMessage({
             action: "bakeAll",
+            data: {source},
         });
         return inputState;
     }
@@ -947,6 +950,19 @@ class InputWaiter {
                 data: {id, inputNum},
             });
         });
+    }
+
+    /**
+     * Returns a Worker-confirmed Input identity only when no newer write is pending.
+     *
+     * @param {number} inputNum - Input number.
+     * @returns {Object|null} Immutable synchronized Input identity or null.
+     */
+    getSynchronizedInputState(inputNum) {
+        if (this.pendingInputChange?.inputNum === inputNum || this.inputUpdates.has(inputNum)) {
+            return null;
+        }
+        return this.inputSync.getState(inputNum);
     }
 
     /**

@@ -232,6 +232,37 @@ class RunTargetBuilder {
     }
 
     /**
+     * Checks whether Recipe, Input, Output and execution options still match a target.
+     *
+     * @param {Object} target - Captured or bound workspace target.
+     * @param {Object} state - Current execution identity state.
+     * @returns {boolean} Whether the execution target remains current.
+     */
+    executionIsCurrent(target, state) {
+        if (!target || !state ||
+            target.recipeRevisionAtStart !== state.recipeRevision ||
+            !Array.isArray(state.inputStates) || !Array.isArray(state.outputStates) ||
+            !this.executionOptionsAreCurrent(target, state.executionOptions)) {
+            return false;
+        }
+
+        const inputStates = new Map(state.inputStates
+                .filter(Boolean)
+                .map(inputState => [inputState.inputNum, inputState])),
+            outputStates = new Map(state.outputStates
+                .filter(Boolean)
+                .map(outputState => [outputState.outputTabId, outputState]));
+
+        return target.inputTargets.every(inputTarget => {
+            const inputState = inputStates.get(inputTarget.inputTabId),
+                outputState = outputStates.get(inputTarget.outputTabId);
+            return inputState?.inputGeneration === inputTarget.inputGeneration &&
+                inputState?.inputRevision === inputTarget.inputRevision &&
+                outputState?.outputGeneration === inputTarget.outputGeneration;
+        });
+    }
+
+    /**
      * Checks whether the active view still matches a target.
      *
      * @param {Object} target - Captured workspace target.

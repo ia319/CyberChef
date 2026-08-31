@@ -15,8 +15,15 @@ module.exports = {
 
     "Manual Bake uses the latest Worker-confirmed Input": browser => {
         browser.executeAsync(async done => {
+            let originalBake = null,
+                worker = null,
+                originalWordWrap,
+                originalReturnType,
+                hadReturnType = false,
+                optionsChanged = false;
             try {
                 const app = window.app,
+                    manager = app.manager,
                     input = app.manager.input,
                     inputNum = app.manager.tabs.getActiveTab("input"),
                     latestValue = "latest input";
@@ -28,8 +35,17 @@ module.exports = {
                 }]);
 
                 const before = await input.getInputState(inputNum),
+                    outputBefore = manager.output.getOutputState(inputNum),
                     view = input.inputEditorView,
                     bakeIdBefore = app.manager.worker.bakeId;
+                worker = manager.worker;
+                originalBake = worker.bake;
+                let capturedTarget = null;
+                worker.bake = function(recipeConfig, target) {
+                    const result = originalBake.call(this, recipeConfig, target);
+                    capturedTarget = this.bakeTarget;
+                    return result;
+                };
                 app.manager.controls.setAutoBake(true);
                 view.dispatch({
                     changes: {
@@ -53,6 +69,22 @@ module.exports = {
                     output = app.manager.output.outputs[inputNum],
                     decode = value => typeof value === "string" ? value :
                         new TextDecoder().decode(value);
+                if (!capturedTarget) throw new Error("Bake target was not captured");
+                const targetInput = capturedTarget.inputTargets[0];
+                originalWordWrap = app.options.wordWrap;
+                optionsChanged = true;
+                app.options.wordWrap = !originalWordWrap;
+                const displayOptionCurrent = manager.runTargets.executionIsCurrent(
+                    capturedTarget,
+                    worker.getCurrentExecutionState(capturedTarget)
+                );
+                hadReturnType = Object.prototype.hasOwnProperty.call(app.options, "returnType");
+                originalReturnType = app.options.returnType;
+                app.options.returnType = "string";
+                const executionOptionCurrent = manager.runTargets.executionIsCurrent(
+                    capturedTarget,
+                    worker.getCurrentExecutionState(capturedTarget)
+                );
                 await new Promise(resolve => setTimeout(resolve, 100));
                 done({
                     beforeRevision: before.inputRevision,
@@ -62,9 +94,33 @@ module.exports = {
                     storedValue: decode(storedValue),
                     outputStatus: output.status,
                     outputValue: decode(output.data.result),
+                    target: {
+                        source: capturedTarget.source,
+                        inputGeneration: targetInput.inputGeneration,
+                        inputRevision: targetInput.inputRevision,
+                        outputGeneration: targetInput.outputGeneration,
+                        bakeId: capturedTarget.bakeId,
+                        bakeIdDelta: capturedTarget.bakeId - bakeIdBefore,
+                        frozen: Object.isFrozen(capturedTarget) &&
+                            Object.isFrozen(capturedTarget.inputTargets) &&
+                            Object.isFrozen(targetInput),
+                    },
+                    outputBefore,
+                    displayOptionCurrent,
+                    executionOptionCurrent,
                 });
             } catch (err) {
                 done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                if (worker && originalBake) worker.bake = originalBake;
+                if (worker && optionsChanged) {
+                    worker.app.options.wordWrap = originalWordWrap;
+                    if (hadReturnType) {
+                        worker.app.options.returnType = originalReturnType;
+                    } else {
+                        delete worker.app.options.returnType;
+                    }
+                }
             }
         }, [], ({value}) => {
             browser.assert.strictEqual(value.scriptError, undefined);
@@ -77,6 +133,23 @@ module.exports = {
             browser.assert.strictEqual(value.storedValue, "latest input");
             browser.assert.strictEqual(value.outputStatus, "baked");
             browser.assert.strictEqual(value.outputValue, "bGF0ZXN0IGlucHV0");
+            browser.assert.strictEqual(value.target.source, "manual");
+            browser.assert.strictEqual(
+                value.target.inputGeneration,
+                value.synchronized.inputGeneration
+            );
+            browser.assert.strictEqual(
+                value.target.inputRevision,
+                value.synchronized.inputRevision
+            );
+            browser.assert.strictEqual(
+                value.target.outputGeneration,
+                value.outputBefore.outputGeneration
+            );
+            browser.assert.strictEqual(value.target.bakeIdDelta, 1);
+            browser.assert.strictEqual(value.target.frozen, true);
+            browser.assert.strictEqual(value.displayOptionCurrent, true);
+            browser.assert.strictEqual(value.executionOptionCurrent, false);
         });
     },
 
@@ -118,6 +191,58 @@ module.exports = {
             );
             browser.assert.strictEqual(value.storedEncoding, 1252);
             browser.assert.strictEqual(value.storedEol, "\r\n");
+        });
+    },
+
+    "Auto Bake and Step capture their execution sources": browser => {
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager,
+                input = manager.input,
+                worker = manager.worker,
+                originalBake = worker.bake,
+                captured = [];
+            try {
+                worker.bake = function(recipeConfig, target) {
+                    const result = originalBake.call(this, recipeConfig, target);
+                    captured.push({
+                        source: this.bakeTarget.source,
+                        step: this.bakeTarget.step,
+                    });
+                    return result;
+                };
+                manager.controls.setAutoBake(true);
+
+                const view = input.inputEditorView;
+                view.dispatch({changes: {from: view.state.doc.length, insert: "!"}});
+                await input.flushActiveInput();
+
+                let deadline = Date.now() + 5000;
+                while ((!captured.some(target => target.source === "auto") || app.baking) &&
+                    Date.now() < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+
+                manager.controls.setAutoBake(false);
+                await app.step();
+                deadline = Date.now() + 5000;
+                while ((!captured.some(target => target.source === "step") || app.baking) &&
+                    Date.now() < deadline) {
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                done({captured});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                worker.bake = originalBake;
+                manager.controls.setAutoBake(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.deepStrictEqual(value.captured, [
+                {source: "auto", step: false},
+                {source: "step", step: true},
+            ]);
         });
     },
 
@@ -210,6 +335,83 @@ module.exports = {
                 value.initialView.viewVersion + 2
             );
             browser.assert.strictEqual(value.outputChanged.tabsSynchronized, true);
+        });
+    },
+
+    "Input changes make an in-flight Bake target stale": browser => {
+        browser.executeAsync(async done => {
+            try {
+                const app = window.app,
+                    manager = app.manager,
+                    input = manager.input;
+
+                manager.controls.setAutoBake(false);
+                input.clearAllIoClick();
+                await input.getInputState(1);
+                app.setRecipeConfig([
+                    {op: "Sleep", args: [300]},
+                    {op: "To Base64", args: ["A-Za-z0-9+/="]},
+                ]);
+
+                const view = input.inputEditorView;
+                view.dispatch({
+                    changes: {
+                        from: 0,
+                        to: view.state.doc.length,
+                        insert: "before",
+                    },
+                });
+                const before = await input.flushActiveInput();
+                await input.bakeAll();
+
+                const startDeadline = Date.now() + 5000;
+                while ((!manager.worker.bakeTarget || !app.baking) && Date.now() < startDeadline) {
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                if (!manager.worker.bakeTarget) throw new Error("Bake did not start");
+                const staleTarget = manager.worker.bakeTarget;
+
+                view.dispatch({
+                    changes: {
+                        from: 0,
+                        to: view.state.doc.length,
+                        insert: "after",
+                    },
+                });
+                const after = await input.flushActiveInput(),
+                    finishDeadline = Date.now() + 5000;
+                while (app.baking && Date.now() < finishDeadline) {
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                const output = manager.output.outputs[1];
+                done({
+                    before,
+                    after,
+                    source: staleTarget.source,
+                    targetCurrent: manager.runTargets.executionIsCurrent(
+                        staleTarget,
+                        manager.worker.getCurrentExecutionState(staleTarget)
+                    ),
+                    outputStatus: output.status,
+                    outputHasData: output.data !== null,
+                    baking: app.baking,
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.source, "manual");
+            browser.assert.strictEqual(
+                value.after.inputRevision,
+                value.before.inputRevision + 1
+            );
+            browser.assert.strictEqual(value.targetCurrent, false);
+            browser.assert.strictEqual(value.outputStatus, "stale");
+            browser.assert.strictEqual(value.outputHasData, false);
+            browser.assert.strictEqual(value.baking, false);
         });
     },
 
