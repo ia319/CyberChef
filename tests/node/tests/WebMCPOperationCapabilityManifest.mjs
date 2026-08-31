@@ -72,6 +72,41 @@ TestRegister.addApiTests([
         assert.equal(register.regexProbe, true);
     }),
 
+    it("WebMCPOperationCapabilityManifest: should keep catalog-derived capabilities authoritative", () => {
+        const catalog = createOperationCatalog({
+                Reviewed: {
+                    description: "Description",
+                    module: "Default",
+                    inputType: "string",
+                    coreOutputType: "List<File>",
+                    outputType: "html",
+                    flowControl: true,
+                },
+            }),
+            policy = {
+                operationName: "Reviewed",
+                reviewStatus: REVIEW_STATUS.SAFE,
+                capabilities: {
+                    flowControl: false,
+                    fileArtifact: false,
+                    htmlPresentation: false,
+                },
+                riskCodes: [],
+                evidence: [],
+                reviewedOn: "2026-08-30",
+                sensitiveArguments: [],
+                resourceLimits: {},
+                mutationPolicy: OPERATION_POLICY.ALLOWED,
+                agentBakePolicy: OPERATION_POLICY.ALLOWED,
+            },
+            capability = createOperationCapabilityManifest(catalog, [policy])
+                .getOperationCapability("Reviewed");
+
+        assert.equal(capability.flowControl, true);
+        assert.equal(capability.fileArtifact, true);
+        assert.equal(capability.htmlPresentation, true);
+    }),
+
     it("WebMCPOperationCapabilityManifest: should expose all capability fields", () => {
         for (const operationName of OPERATION_CAPABILITY_MANIFEST.getOperationNames()) {
             const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName);

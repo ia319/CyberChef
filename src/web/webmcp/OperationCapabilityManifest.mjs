@@ -33,6 +33,11 @@ const CAPABILITY_FIELDS = Object.freeze([
 ]);
 
 const FILE_OUTPUT_TYPES = new Set(["File", "List<File>"]);
+const CATALOG_DERIVED_CAPABILITY_FIELDS = new Set([
+    "flowControl",
+    "fileArtifact",
+    "htmlPresentation",
+]);
 const CAPABILITY_FIELD_SET = new Set(CAPABILITY_FIELDS);
 const REVIEW_STATUS_SET = new Set(Object.values(REVIEW_STATUS));
 const UNREVIEWED_RISK_CODES = Object.freeze(["UNREVIEWED_OPERATION"]);
@@ -74,7 +79,9 @@ function allowedPolicy(profile) {
     return Object.freeze({
         operationName: profile.operationName,
         reviewStatus: REVIEW_STATUS.SAFE,
-        capabilities: Object.freeze(Object.fromEntries(CAPABILITY_FIELDS.map(field => [field, false]))),
+        capabilities: Object.freeze(Object.fromEntries(CAPABILITY_FIELDS
+            .filter(field => !CATALOG_DERIVED_CAPABILITY_FIELDS.has(field))
+            .map(field => [field, false]))),
         riskCodes: Object.freeze([]),
         evidence: profile.evidence,
         reviewedOn: profile.reviewedOn,
@@ -219,10 +226,10 @@ function createOperationCapabilityManifest(
                 reviewed = reviewedByName.get(operationName),
                 capabilities = Object.fromEntries(CAPABILITY_FIELDS.map(field => [field, null]));
 
+            Object.assign(capabilities, reviewed?.capabilities);
             capabilities.flowControl = operation.flowControl;
             capabilities.fileArtifact = FILE_OUTPUT_TYPES.has(operation.coreOutputType);
             capabilities.htmlPresentation = operation.presentType === "html";
-            Object.assign(capabilities, reviewed?.capabilities);
 
             return Object.freeze({
                 operationName,
