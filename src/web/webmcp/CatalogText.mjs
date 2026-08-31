@@ -31,6 +31,40 @@ function decodeHtmlEntities(value) {
 
 
 /**
+ * Removes HTML tags without treating quoted greater-than characters as tag endings.
+ *
+ * @param {string} value - Fixed catalog HTML.
+ * @returns {string} Text and whitespace outside tags.
+ */
+function stripHtmlTags(value) {
+    const text = [];
+    let inTag = false,
+        quote = null;
+
+    for (const character of value) {
+        if (!inTag) {
+            if (character === "<") {
+                inTag = true;
+                text.push(" ");
+            } else {
+                text.push(character);
+            }
+            continue;
+        }
+
+        if (quote !== null) {
+            if (character === quote) quote = null;
+        } else if (character === "\"" || character === "'") {
+            quote = character;
+        } else if (character === ">") {
+            inTag = false;
+        }
+    }
+    return text.join("");
+}
+
+
+/**
  * Converts fixed catalog HTML into bounded plain text.
  *
  * @param {*} value - Fixed catalog text.
@@ -46,7 +80,7 @@ function sanitizeCatalogText(value, maxCodePoints) {
         withoutActiveContent = source
             .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/giu, " ")
             .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/giu, " "),
-        plainText = decodeHtmlEntities(withoutActiveContent.replace(/<[^>]*>/gu, " "))
+        plainText = decodeHtmlEntities(stripHtmlTags(withoutActiveContent))
             .replace(/\s+/gu, " ")
             .trim(),
         codePoints = [...plainText];

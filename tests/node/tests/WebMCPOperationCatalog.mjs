@@ -40,6 +40,14 @@ TestRegister.addApiTests([
         assert.equal(result.endsWith("…"), true);
     }),
 
+    it("WebMCPOperationCatalog: should ignore greater-than characters inside tag attributes", () => {
+        const result = sanitizeOperationDescription(
+            "<a title=\"x > y\" data-label='a > b'>Link</a>"
+        );
+
+        assert.equal(result, "Link");
+    }),
+
     it("WebMCPOperationCatalog: should rank name matches before description matches", () => {
         const catalog = createOperationCatalog(createConfig([
                 ["Foo One", "First"],
