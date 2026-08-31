@@ -243,6 +243,7 @@ class RunCoordinator {
      * @param {string} outcome.state - Completed, paused or failed state.
      * @param {string|null} [outcome.failureKind=null] - Fixed failure classification.
      * @param {string|null} [outcome.presenter=null] - Presenter Operation name.
+     * @param {number|null} [outcome.progress=null] - Final Recipe progress index.
      * @returns {boolean} Whether the Input settled.
      */
     settleInput(bakeId, inputTabId, outcome) {
@@ -251,6 +252,8 @@ class RunCoordinator {
         if (!run || TERMINAL_STATES.has(run.state) || !input ||
             input.state === RUN_STATE.COMPLETED || input.state === RUN_STATE.FAILED ||
             input.state === RUN_STATE.PAUSED || !SETTLED_INPUT_STATES.has(outcome?.state) ||
+            (outcome.progress !== undefined && outcome.progress !== null &&
+                (!Number.isSafeInteger(outcome.progress) || outcome.progress < 0)) ||
             (outcome.state === RUN_STATE.FAILED &&
                 !Object.values(RUN_FAILURE_KIND).includes(outcome.failureKind))) {
             return false;
@@ -259,6 +262,7 @@ class RunCoordinator {
         input.state = outcome.state;
         input.failureKind = outcome.failureKind ?? null;
         input.presenter = typeof outcome.presenter === "string" ? outcome.presenter : null;
+        input.progress = outcome.progress ?? null;
 
         if ([...run.inputs.values()].every(item => SETTLED_INPUT_STATES.has(item.state))) {
             const inputs = [...run.inputs.values()];
@@ -389,6 +393,7 @@ class RunCoordinator {
                     state: RUN_STATE.QUEUED,
                     failureKind: null,
                     presenter: null,
+                    progress: null,
                 },
             ])),
             run = {

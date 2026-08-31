@@ -10,37 +10,43 @@ import {RUN_FAILURE_KIND, RUN_STATE} from "./RunCoordinator.mjs";
  */
 function getRunOutcome(response) {
     const presenter = typeof response?.execution?.presenter === "string" ?
-        response.execution.presenter : null;
+            response.execution.presenter : null,
+        progress = Number.isSafeInteger(response?.execution?.progress) &&
+            response.execution.progress >= 0 ? response.execution.progress : null;
     if (response?.error) {
         return Object.freeze({
             state: RUN_STATE.FAILED,
             failureKind: RUN_FAILURE_KIND.FATAL,
             presenter,
+            progress,
         });
     }
 
     switch (response?.execution?.state) {
         case RECIPE_EXECUTION_STATE.COMPLETED:
-            return Object.freeze({state: RUN_STATE.COMPLETED, presenter});
+            return Object.freeze({state: RUN_STATE.COMPLETED, presenter, progress});
         case RECIPE_EXECUTION_STATE.PAUSED:
-            return Object.freeze({state: RUN_STATE.PAUSED, presenter});
+            return Object.freeze({state: RUN_STATE.PAUSED, presenter, progress});
         case RECIPE_EXECUTION_STATE.EXPECTED_FAILURE:
             return Object.freeze({
                 state: RUN_STATE.FAILED,
                 failureKind: RUN_FAILURE_KIND.EXPECTED,
                 presenter,
+                progress,
             });
         case RECIPE_EXECUTION_STATE.FATAL_FAILURE:
             return Object.freeze({
                 state: RUN_STATE.FAILED,
                 failureKind: RUN_FAILURE_KIND.FATAL,
                 presenter,
+                progress,
             });
         default:
             return Object.freeze({
                 state: RUN_STATE.FAILED,
                 failureKind: RUN_FAILURE_KIND.PROTOCOL,
                 presenter: null,
+                progress: null,
             });
     }
 }

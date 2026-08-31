@@ -39,6 +39,7 @@ TestRegister.addApiTests([
             completed = createOutputProvenance(target, 1, 9, {
                 state: RUN_STATE.COMPLETED,
                 presenter: "To Base64",
+                progress: 1,
             });
 
         assert.equal(Object.isFrozen(pending), true);
@@ -59,6 +60,7 @@ TestRegister.addApiTests([
             terminalState: RUN_STATE.COMPLETED,
             failureKind: null,
             presenter: "To Base64",
+            progress: 1,
         });
     }),
 
@@ -79,6 +81,13 @@ TestRegister.addApiTests([
         }), 1), false);
         assert.throws(
             () => createOutputProvenance(target, 1, 11, {state: RUN_STATE.RUNNING}),
+            /Output provenance is invalid/
+        );
+        assert.throws(
+            () => createOutputProvenance(target, 1, 11, {
+                state: RUN_STATE.PAUSED,
+                progress: -1,
+            }),
             /Output provenance is invalid/
         );
     }),

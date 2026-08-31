@@ -565,6 +565,8 @@ class WorkerWaiter {
                 const outcome = {
                     state: RUN_STATE.FAILED,
                     failureKind: RUN_FAILURE_KIND.FATAL,
+                    progress: Number.isSafeInteger(r.data.progress) &&
+                        r.data.progress >= 0 ? r.data.progress : null,
                 };
                 this.manager.output.settleRunTarget(workerObj.runTarget, inputNum, outcome);
                 this.app.handleError(r.data.error);

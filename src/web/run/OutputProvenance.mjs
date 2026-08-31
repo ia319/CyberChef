@@ -35,12 +35,14 @@ function getTargetInput(target, inputTabId) {
 function createOutputProvenance(target, inputTabId, outputVersion, outcome={}) {
     const inputTarget = getTargetInput(target, inputTabId),
         terminalState = outcome.state ?? null,
-        failureKind = terminalState === RUN_STATE.FAILED ? outcome.failureKind : null;
+        failureKind = terminalState === RUN_STATE.FAILED ? outcome.failureKind : null,
+        progress = outcome.progress ?? null;
     if (!inputTarget || !Number.isSafeInteger(target?.bakeId) || target.bakeId < 1 ||
         !Number.isSafeInteger(target.recipeRevisionAtStart) ||
         !Number.isSafeInteger(target.executionOptionsVersion) ||
         !Number.isSafeInteger(outputVersion) || outputVersion < 1 ||
         (terminalState !== null && !OUTPUT_TERMINAL_STATES.has(terminalState)) ||
+        (progress !== null && (!Number.isSafeInteger(progress) || progress < 0)) ||
         (terminalState === RUN_STATE.FAILED &&
             !Object.values(RUN_FAILURE_KIND).includes(failureKind))) {
         throw new TypeError("Output provenance is invalid");
@@ -60,6 +62,7 @@ function createOutputProvenance(target, inputTabId, outputVersion, outcome={}) {
         terminalState,
         failureKind,
         presenter: typeof outcome.presenter === "string" ? outcome.presenter : null,
+        progress,
     });
 }
 

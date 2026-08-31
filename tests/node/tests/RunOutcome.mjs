@@ -22,11 +22,12 @@ TestRegister.addApiTests([
         ];
         for (const [executionState, state, failureKind] of cases) {
             const outcome = getRunOutcome({
-                execution: {state: executionState, presenter: "To Base64"},
+                execution: {state: executionState, presenter: "To Base64", progress: 2},
             });
             assert.equal(outcome.state, state);
             assert.equal(outcome.failureKind, failureKind);
             assert.equal(outcome.presenter, executionState === "unknown" ? null : "To Base64");
+            assert.equal(outcome.progress, executionState === "unknown" ? null : 2);
         }
     }),
 
@@ -36,11 +37,24 @@ TestRegister.addApiTests([
             execution: {
                 state: RECIPE_EXECUTION_STATE.COMPLETED,
                 presenter: "To Hex",
+                progress: 3,
             },
         }), {
             state: RUN_STATE.FAILED,
             failureKind: RUN_FAILURE_KIND.FATAL,
             presenter: "To Hex",
+            progress: 3,
         });
+    }),
+
+    it("RunOutcome: should reject malformed progress metadata", () => {
+        const outcome = getRunOutcome({
+            execution: {
+                state: RECIPE_EXECUTION_STATE.PAUSED,
+                progress: -1,
+            },
+        });
+
+        assert.equal(outcome.progress, null);
     }),
 ]);

@@ -79,6 +79,7 @@ TestRegister.addApiTests([
         }), true);
         assert.equal(coordinator.settleInput(request.run.bakeId, 3, {
             state: RUN_STATE.PAUSED,
+            progress: 1,
         }), true);
         assert.equal(coordinator.settleInput(request.run.bakeId, 3, {
             state: RUN_STATE.COMPLETED,
@@ -87,8 +88,24 @@ TestRegister.addApiTests([
         const result = await request.completion;
         assert.equal(result.terminalState, RUN_STATE.PAUSED);
         assert.equal(result.inputs[0].presenter, "To Base64");
+        assert.equal(result.inputs[1].progress, 1);
         assert.equal(Object.isFrozen(result), true);
         assert.doesNotThrow(() => JSON.stringify(result));
+    }),
+
+    it("RunCoordinator: should reject invalid final progress", () => {
+        const coordinator = new RunCoordinator(),
+            request = coordinator.ensure(createTarget(), {
+                owner: RUN_OWNER.USER,
+                mode: RUN_MODE.MANUAL,
+            });
+
+        assert.equal(coordinator.settleInput(request.run.bakeId, 2, {
+            state: RUN_STATE.PAUSED,
+            progress: -1,
+        }), false);
+        assert.equal(coordinator.getRun(request.run.bakeId).state, RUN_STATE.QUEUED);
+        coordinator.settle(request.run.bakeId, RUN_STATE.CANCELLED);
     }),
 
     it("RunCoordinator: should reuse, join, start and reject busy targets", async () => {
