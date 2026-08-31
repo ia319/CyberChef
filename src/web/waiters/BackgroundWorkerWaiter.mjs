@@ -44,15 +44,16 @@ class BackgroundWorkerWaiter {
      */
     registerChefWorker() {
         log.debug("Registering new background ChefWorker");
-        this.chefWorker = new ChefWorker();
-        this.chefWorker.addEventListener("message", this.handleChefMessage.bind(this));
-        this.chefWorker.addEventListener("error", this.handleChefFailure.bind(this));
-        this.chefWorker.addEventListener("messageerror", this.handleChefFailure.bind(this));
-        this.chefWorker.postMessage({
+        const worker = new ChefWorker();
+        this.chefWorker = worker;
+        worker.addEventListener("message", this.handleChefMessage.bind(this));
+        worker.addEventListener("error", () => this.handleChefFailure(worker));
+        worker.addEventListener("messageerror", () => this.handleChefFailure(worker));
+        worker.postMessage({
             action: "setLogPrefix",
             data: "BGChefWorker"
         });
-        this.chefWorker.postMessage({
+        worker.postMessage({
             action: "setLogLevel",
             data: log.getLevel()
         });
@@ -62,7 +63,7 @@ class BackgroundWorkerWaiter {
         if (index > 0) {
             docURL = docURL.substring(0, index);
         }
-        this.chefWorker.postMessage({"action": "docURL", "data": docURL});
+        worker.postMessage({"action": "docURL", "data": docURL});
     }
 
 
@@ -104,12 +105,17 @@ class BackgroundWorkerWaiter {
 
     /**
      * Settles an active analysis after a Worker transport failure.
+     *
+     * @param {Worker} [worker=this.chefWorker] - Worker that emitted the failure.
+     * @returns {void}
      */
-    handleChefFailure() {
+    handleChefFailure(worker=this.chefWorker) {
+        if (worker !== this.chefWorker) return;
         const analysisId = this.activeAnalysis?.analysisId;
-        if (analysisId === undefined) return;
-        this.manager.analyses.settle(analysisId, ANALYSIS_STATE.FAILED);
-        this.cancelAnalysis(analysisId);
+        if (analysisId !== undefined) {
+            this.manager.analyses.settle(analysisId, ANALYSIS_STATE.FAILED);
+        }
+        this.cancelBake();
     }
 
 
@@ -122,7 +128,7 @@ class BackgroundWorkerWaiter {
     cancelBake(id=null) {
         const activeId = this.activeAnalysis?.workerRequestId;
         if (id !== null && id !== activeId) return false;
-        if (activeId !== undefined) this.callbacks.delete(activeId);
+        this.callbacks.clear();
         this.activeAnalysis = null;
         if (this.chefWorker)
             this.chefWorker.terminate();

@@ -952,6 +952,27 @@ module.exports = {
         });
     },
 
+    "Background Worker failure replaces only the current Worker": browser => {
+        browser.execute(() => {
+            const background = window.app.manager.background,
+                failedWorker = background.chefWorker;
+            background.handleChefFailure(failedWorker);
+            const replacement = background.chefWorker;
+            background.handleChefFailure(failedWorker);
+            return {
+                replaced: replacement !== failedWorker,
+                staleFailureIgnored: background.chefWorker === replacement,
+                callbacksCleared: background.callbacks.size === 0,
+                analysisIdle: background.activeAnalysis === null,
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.replaced, true);
+            browser.assert.strictEqual(value.staleFailureIgnored, true);
+            browser.assert.strictEqual(value.callbacksCleared, true);
+            browser.assert.strictEqual(value.analysisIdle, true);
+        });
+    },
+
     "Silent Bake reaches its terminal state": browser => {
         browser.execute(() => {
             const app = window.app,
