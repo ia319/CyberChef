@@ -31,6 +31,7 @@ import "./tests/lib/ChartsProtocolPrototypePollution.mjs";
 import "./tests/OperationConfigTypes.mjs";
 import "./tests/InputSyncController.mjs";
 import "./tests/RunTargetBuilder.mjs";
+import "./tests/RunCoordinator.mjs";
 import "./tests/ChefExecution.mjs";
 import "./tests/RecipeModel.mjs";
 import "./tests/RecipePatch.mjs";
