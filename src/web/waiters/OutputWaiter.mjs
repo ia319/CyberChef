@@ -54,6 +54,30 @@ import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUti
 
 
 /**
+ * Waits for one operation while allowing its caller to abandon a late result.
+ *
+ * @param {Promise<*>} completion - Operation completion.
+ * @param {AbortSignal|null} [signal=null] - Optional cancellation signal.
+ * @returns {Promise<*>} Operation result.
+ */
+async function awaitWithAbort(completion, signal=null) {
+    if (!signal) return await completion;
+    if (signal.aborted) throw signal.reason;
+
+    let abortHandler;
+    const cancellation = new Promise((_, reject) => {
+        abortHandler = () => reject(signal.reason);
+        signal.addEventListener("abort", abortHandler, {once: true});
+    });
+    try {
+        return await Promise.race([completion, cancellation]);
+    } finally {
+        signal.removeEventListener("abort", abortHandler);
+    }
+}
+
+
+/**
   * Waiter to handle events related to the output
   */
 class OutputWaiter {
@@ -702,22 +726,7 @@ class OutputWaiter {
             return false;
         }
 
-        let published;
-        if (!signal) {
-            published = await presentation.completion;
-        } else {
-            if (signal.aborted) throw signal.reason;
-            let abortHandler;
-            const cancellation = new Promise((_, reject) => {
-                abortHandler = () => reject(signal.reason);
-                signal.addEventListener("abort", abortHandler, {once: true});
-            });
-            try {
-                published = await Promise.race([presentation.completion, cancellation]);
-            } finally {
-                signal.removeEventListener("abort", abortHandler);
-            }
-        }
+        const published = await awaitWithAbort(presentation.completion, signal);
 
         return published === true && output.provenance === provenance &&
             output.presentation === presentation &&
@@ -753,8 +762,7 @@ class OutputWaiter {
         if (dish === null || bakeId !== null && provenance?.bakeId !== bakeId ||
             !this.isCurrentOutputProvenance(provenance)) return null;
 
-        const buffer = await this.getDishBuffer(dish);
-        if (signal?.aborted) throw signal.reason;
+        const buffer = await awaitWithAbort(this.getDishBuffer(dish), signal);
         if (!(buffer instanceof ArrayBuffer)) {
             throw new TypeError("Output analysis input is invalid");
         }

@@ -952,6 +952,45 @@ module.exports = {
         });
     },
 
+    "Output analysis capture responds to cancellation": browser => {
+        browser.executeAsync(async done => {
+            const output = window.app.manager.output,
+                inputNum = window.app.manager.tabs.getActiveTab("output"),
+                provenance = output.getOutputProvenance(inputNum),
+                originalGetDishBuffer = output.getDishBuffer,
+                controller = new AbortController();
+            try {
+                output.getDishBuffer = () => new Promise(() => {});
+                const capture = output.captureAnalysisInput(
+                    provenance.bakeId,
+                    controller.signal
+                ).then(
+                    () => ({state: "resolved"}),
+                    err => ({state: "rejected", name: err.name})
+                );
+                controller.abort(new DOMException("Analysis cancelled", "AbortError"));
+                const outcome = await Promise.race([
+                    capture,
+                    new Promise(resolve => setTimeout(
+                        () => resolve({state: "timed-out"}),
+                        500
+                    )),
+                ]);
+                done({outcome});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                output.getDishBuffer = originalGetDishBuffer;
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.deepStrictEqual(value.outcome, {
+                state: "rejected",
+                name: "AbortError",
+            });
+        });
+    },
+
     "Background Worker failure replaces only the current Worker": browser => {
         browser.execute(() => {
             const background = window.app.manager.background,
