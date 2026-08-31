@@ -5,6 +5,7 @@
  */
 
 import Utils from "../../core/Utils.mjs";
+import {RECIPE_TRANSACTION_SOURCE} from "../recipe/RecipeTransaction.mjs";
 import { eolSeqToCode } from "../utils/editorUtils.mjs";
 
 
@@ -352,8 +353,7 @@ class ControlsWaiter {
     loadButtonClick() {
         try {
             const recipeConfig = Utils.parseRecipeConfig(document.getElementById("load-text").value);
-            this.app.setRecipeConfig(recipeConfig);
-            this.app.autoBake();
+            this.app.setRecipeConfig(recipeConfig, RECIPE_TRANSACTION_SOURCE.SAVED_RECIPE);
 
             $("#rec-list [data-toggle=popover]").popover();
         } catch (e) {

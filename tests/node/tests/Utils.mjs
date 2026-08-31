@@ -1,5 +1,5 @@
 import TestRegister from "../../lib/TestRegister.mjs";
-import Utils from "../../../src/core/Utils.mjs";
+import Utils, {cancelDebounce, debounce} from "../../../src/core/Utils.mjs";
 import it from "../assertionHandler.mjs";
 import assert from "assert";
 
@@ -102,5 +102,15 @@ TestRegister.addApiTests([
             () => Utils.parseRecipeConfig("A('" + "\\".repeat(10000)),
             /Invalid recipe/,
         );
+    }),
+
+    it("Utils: should cancel a pending debounced operation", async () => {
+        let calls = 0;
+        debounce(() => calls++, 20, "cancel-test", null, [])();
+
+        assert.equal(cancelDebounce("cancel-test"), true);
+        assert.equal(cancelDebounce("cancel-test"), false);
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.equal(calls, 0);
     }),
 ]);

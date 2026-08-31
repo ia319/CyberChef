@@ -18,6 +18,20 @@ import BindingsWaiter from "./waiters/BindingsWaiter.mjs";
 import BackgroundWorkerWaiter from "./waiters/BackgroundWorkerWaiter.mjs";
 import TabWaiter from "./waiters/TabWaiter.mjs";
 import TimingWaiter from "./waiters/TimingWaiter.mjs";
+import WebMCPWaiter from "./waiters/WebMCPWaiter.mjs";
+import CollaborationWaiter from "./waiters/CollaborationWaiter.mjs";
+import {ACTIVE_BUILD_PROFILE} from "./webmcp/BuildProfiles.mjs";
+import {AGENT_RECIPE_PATCH_POLICY} from "./webmcp/AgentRecipePatchPolicy.mjs";
+import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
+import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
+import {createBakeRecipeToolHandlers} from "./webmcp/BakeRecipeToolHandlers.mjs";
+import {AgentBakeService} from "./webmcp/AgentBakeService.mjs";
+import {AgentAnalysisService} from "./webmcp/AgentAnalysisService.mjs";
+import {createInspectOutputToolHandlers} from "./webmcp/InspectOutputToolHandlers.mjs";
+import {TOOL_NAME} from "./webmcp/ToolDefinitions.mjs";
+import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
+import {RunCoordinator} from "./run/RunCoordinator.mjs";
+import {AnalysisCoordinator} from "./analysis/AnalysisCoordinator.mjs";
 
 
 /**
@@ -60,11 +74,25 @@ class Manager {
         this.statechange = new CustomEvent("statechange", {bubbles: true});
 
         // Define Waiter objects to handle various areas
+        this.runTargets  = new RunTargetBuilder();
+        this.runs        = new RunCoordinator({
+            onExclusiveAgentAbort: run => this.worker?.terminateCoordinatedRun(run),
+            onTimeout: run => this.worker?.terminateCoordinatedRun(run),
+        });
+        this.analyses    = new AnalysisCoordinator({
+            onAbandoned: analysis => this.background?.cancelAnalysis(analysis.analysisId),
+            onTimeout: analysis => this.background?.cancelAnalysis(analysis.analysisId),
+        });
         this.timing      = new TimingWaiter(this.app, this);
         this.worker      = new WorkerWaiter(this.app, this);
         this.window      = new WindowWaiter(this.app);
         this.controls    = new ControlsWaiter(this.app, this);
-        this.recipe      = new RecipeWaiter(this.app, this);
+        this.recipe      = new RecipeWaiter(
+            this.app,
+            this,
+            AGENT_RECIPE_PATCH_POLICY,
+            ACTIVE_BUILD_PROFILE.toolNames.includes(TOOL_NAME.BAKE_RECIPE)
+        );
         this.ops         = new OperationsWaiter(this.app, this);
         this.tabs        = new TabWaiter(this.app, this);
         this.input       = new InputWaiter(this.app, this);
@@ -74,6 +102,27 @@ class Manager {
         this.seasonal    = new SeasonalWaiter(this.app, this);
         this.bindings    = new BindingsWaiter(this.app, this);
         this.background  = new BackgroundWorkerWaiter(this.app, this);
+        this.agentBake   = new AgentBakeService(this.app, this);
+        this.agentAnalysis = new AgentAnalysisService(this);
+        const runStateService = ACTIVE_BUILD_PROFILE.toolNames.includes(TOOL_NAME.BAKE_RECIPE) ?
+            this.agentBake : null;
+        this.webmcp      = new WebMCPWaiter(
+            document.modelContext,
+            document,
+            window,
+            ACTIVE_BUILD_PROFILE,
+            {
+                ...OPERATION_TOOL_HANDLERS,
+                ...createRecipeToolHandlers(this.recipe, runStateService),
+                ...createBakeRecipeToolHandlers(this.agentBake),
+                ...createInspectOutputToolHandlers(this.agentAnalysis),
+            }
+        );
+        this.collaboration = new CollaborationWaiter(
+            this,
+            this.webmcp.session,
+            this.webmcp.buildProfile
+        );
 
         // Object to store dynamic handlers to fire on elements that may not exist yet
         this.dynamicHandlers = {};
@@ -95,6 +144,8 @@ class Manager {
         this.bindings.updateKeybList();
         this.background.registerChefWorker();
         this.seasonal.load();
+        this.webmcp.setup();
+        this.collaboration.setup();
 
         this.confirmWaitersLoaded();
     }
@@ -323,7 +374,8 @@ class Manager {
     addDynamicListener(selector, eventType, callback, scope) {
         const eventConfig = {
             selector: selector,
-            callback: callback.bind(scope || this)
+            callback: callback.bind(scope || this),
+            scope: scope || this,
         };
 
         if (Object.prototype.hasOwnProperty.call(this.dynamicHandlers, eventType)) {

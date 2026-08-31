@@ -39,7 +39,42 @@ import {
 import {statusBar} from "../utils/statusBar.mjs";
 import {htmlPlugin} from "../utils/htmlWidget.mjs";
 import {copyOverride} from "../utils/copyOverride.mjs";
+import {RECIPE_TRANSACTION_SOURCE} from "../recipe/RecipeTransaction.mjs";
+import {
+    createOutputProvenance,
+    outputProvenanceMatchesTarget,
+} from "../run/OutputProvenance.mjs";
+import {RUN_STATE} from "../run/RunCoordinator.mjs";
+import {
+    ANALYSIS_OWNER,
+    ANALYSIS_STATE,
+} from "../analysis/AnalysisCoordinator.mjs";
+import {MAX_ANALYSIS_SAMPLE_BYTES} from "../analysis/AnalysisPolicy.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
+
+
+/**
+ * Waits for one operation while allowing its caller to abandon a late result.
+ *
+ * @param {Promise<*>} completion - Operation completion.
+ * @param {AbortSignal|null} [signal=null] - Optional cancellation signal.
+ * @returns {Promise<*>} Operation result.
+ */
+async function awaitWithAbort(completion, signal=null) {
+    if (!signal) return await completion;
+    if (signal.aborted) throw signal.reason;
+
+    let abortHandler;
+    const cancellation = new Promise((_, reject) => {
+        abortHandler = () => reject(signal.reason);
+        signal.addEventListener("abort", abortHandler, {once: true});
+    });
+    try {
+        return await Promise.race([completion, cancellation]);
+    } finally {
+        signal.removeEventListener("abort", abortHandler);
+    }
+}
 
 
 /**
@@ -65,9 +100,17 @@ class OutputWaiter {
         };
         // Hold a copy of the currently displayed output so that we don't have to update it unnecessarily
         this.currentOutputCache = null;
+        this.currentOutputCacheGeneration = null;
+        this.outputRenderGeneration = 0;
+        this.loaderRequested = false;
+        this.appendBombeTimeout = null;
+        this.showOutputLoaderTimeout = null;
+        this.removeBombeTimeout = null;
+        this.magicButtonProvenance = null;
         this.initEditor();
 
         this.outputs = {};
+        this.nextOutputGeneration = 1;
         this.zipWorker = null;
         this.maxTabs = this.manager.tabs.calcMaxTabs();
         this.tabTimeout = null;
@@ -154,8 +197,10 @@ class OutputWaiter {
      * Sets the line separator
      * @param {string} eol
      * @param {boolean} [manual=false]
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async eolChange(eol, manual=false) {
+    async eolChange(eol, manual=false, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         const eolVal = eolCodeToSeq[eol];
         if (eolVal === undefined) return;
 
@@ -180,7 +225,8 @@ class OutputWaiter {
         });
 
         // Reset the output so that lines are recalculated, preserving the old EOL values
-        await this.setOutput(this.currentOutputCache, true);
+        await this.setOutput(this.currentOutputCache, true, renderGeneration);
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // Update the URL manually since we aren't firing a statechange event
         this.app.updateURL(true);
     }
@@ -211,8 +257,10 @@ class OutputWaiter {
      * Sets the output character encoding
      * @param {number} chrEncVal
      * @param {boolean} [manual=false]
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async chrEncChange(chrEncVal, manual=false) {
+    async chrEncChange(chrEncVal, manual=false, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         if (typeof chrEncVal !== "number") return;
         const currentEnc = this.getChrEnc();
 
@@ -227,7 +275,8 @@ class OutputWaiter {
 
         if (this.encodingState > 1) {
             // Reset the output, forcing it to re-decode the data with the new character encoding
-            await this.setOutput(this.currentOutputCache, true);
+            await this.setOutput(this.currentOutputCache, true, renderGeneration);
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
             // Update the URL manually since we aren't firing a statechange event
             this.app.updateURL(true);
         } else if (currentEnc !== chrEncVal) {
@@ -272,16 +321,21 @@ class OutputWaiter {
      * Sets the value of the current output
      * @param {string|ArrayBuffer} data
      * @param {boolean} [force=false]
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
+     * @returns {Promise<boolean>} Whether the editor published this render.
      */
-    async setOutput(data, force=false) {
+    async setOutput(data, force=false, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return false;
         // Don't do anything if the output hasn't changed
-        if (!force && data === this.currentOutputCache) {
+        if (!force && data === this.currentOutputCache &&
+            (renderGeneration === null || renderGeneration === this.currentOutputCacheGeneration)) {
             this.manager.controls.hideStaleIndicator();
             this.toggleLoader(false);
-            return;
+            return true;
         }
 
         this.currentOutputCache = data;
+        this.currentOutputCacheGeneration = renderGeneration;
         this.toggleLoader(true);
 
         // Remove class to #output-text to change display settings
@@ -291,8 +345,10 @@ class OutputWaiter {
         const tabNum = this.manager.tabs.getActiveTab("output");
         this.manager.timing.recordTime("outputDecodingStart", tabNum);
         if (data instanceof ArrayBuffer) {
-            await this.detectEncoding(data);
+            await this.detectEncoding(data, renderGeneration);
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
             data = await this.bufferToStr(data);
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         }
         this.manager.timing.recordTime("outputDecodingEnd", tabNum);
 
@@ -321,12 +377,16 @@ class OutputWaiter {
         if (!wrap) this.setWordWrap(wrap);
 
         // Detect suitable EOL sequence
-        this.detectEOLSequence(data);
+        this.detectEOLSequence(data, renderGeneration);
 
         // We use setTimeout here to delay the editor dispatch until the next event cycle,
         // ensuring all async actions have completed before attempting to set the contents
         // of the editor. This is mainly with the above call to setWordWrap() in mind.
-        setTimeout(() => {
+        return await new Promise(resolve => setTimeout(() => {
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) {
+                resolve(false);
+                return;
+            }
             this.docChanging = true;
             // Insert data into editor, overwriting any previous contents
             this.outputEditorView.dispatch({
@@ -336,26 +396,29 @@ class OutputWaiter {
                     insert: data
                 }
             });
-
             // If turning word wrap on, do it after we populate the editor
             if (wrap)
                 setTimeout(() => {
+                    if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
                     this.setWordWrap(wrap);
                 });
-        });
+            resolve(true);
+        }));
     }
 
     /**
      * Sets the value of the current output to a rendered HTML value
      * @param {string} html
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
+     * @returns {Promise<boolean>} Whether the editor published this HTML render.
      */
-    async setHTMLOutput(html) {
+    async setHTMLOutput(html, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return false;
         this.htmlOutput.html = html;
         this.htmlOutput.changed = true;
-        // This clears the text output, but also fires a View update which
-        // triggers the htmlWidget to render the HTML. We set the force flag
-        // to ensure the loader gets removed and HTML is rendered.
-        await this.setOutput("", true);
+        const published = await this.setOutput("", true, renderGeneration);
+        if (!published || renderGeneration !== null &&
+            renderGeneration !== this.outputRenderGeneration) return false;
 
         // Turn off drawSelection
         this.outputEditorView.dispatch({
@@ -369,12 +432,16 @@ class OutputWaiter {
         const outputHTML = document.getElementById("output-html");
         const scriptElements = outputHTML ? outputHTML.querySelectorAll("script") : [];
         for (let i = 0; i < scriptElements.length; i++) {
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) {
+                return false;
+            }
             try {
                 eval(scriptElements[i].innerHTML); // eslint-disable-line no-eval
             } catch (err) {
                 log.error(err);
             }
         }
+        return true;
     }
 
     /**
@@ -396,8 +463,10 @@ class OutputWaiter {
      * Checks whether the EOL separator should be updated
      *
      * @param {string} data
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    detectEOLSequence(data) {
+    detectEOLSequence(data, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // If EOL has been fixed, skip this.
         if (this.eolState > 1) return;
         // If data is too long, skip this.
@@ -437,15 +506,17 @@ class OutputWaiter {
 
         // Setting automatically
         this.eolState = 1;
-        this.eolChange(choice);
+        this.eolChange(choice, false, renderGeneration);
     }
 
     /**
      * Checks whether the character encoding should be updated.
      *
      * @param {ArrayBuffer} data
+     * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
      */
-    async detectEncoding(data) {
+    async detectEncoding(data, renderGeneration=null) {
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
         // If encoding has been fixed, skip this.
         if (this.encodingState > 1) return;
         // If data is too long, skip this.
@@ -457,12 +528,12 @@ class OutputWaiter {
             case 0: // not UTF8
                 // Set to Raw Bytes
                 this.encodingState = 1;
-                await this.chrEncChange(0, false);
+                await this.chrEncChange(0, false, renderGeneration);
                 break;
             case 2: // UTF8
                 // Set to UTF8
                 this.encodingState = 1;
-                await this.chrEncChange(65001, false);
+                await this.chrEncChange(65001, false, renderGeneration);
                 break;
             case 1: // ASCII
             default:
@@ -512,6 +583,224 @@ class OutputWaiter {
     }
 
     /**
+     * Returns a content-free Output identity.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @returns {Object|null} Immutable Output identity or null.
+     */
+    getOutputState(inputNum) {
+        const output = this.outputs[inputNum];
+        if (!output) return null;
+        return Object.freeze({
+            outputTabId: output.inputNum,
+            outputGeneration: output.outputGeneration,
+            outputVersion: output.outputVersion,
+        });
+    }
+
+    /**
+     * Returns the immutable provenance currently attached to an Output.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @returns {Object|null} Content-free provenance or null.
+     */
+    getOutputProvenance(inputNum) {
+        return this.outputs[inputNum]?.provenance ?? null;
+    }
+
+    /**
+     * Checks whether a Run-scoped write belongs to the Output's bound provenance.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @param {Object|null} target - Optional bound Run target.
+     * @returns {boolean} Whether the write may update this Output.
+     */
+    acceptsRunTarget(inputNum, target) {
+        if (target === null) return this.outputExists(inputNum);
+        const output = this.outputs[inputNum];
+        return !!output && outputProvenanceMatchesTarget(
+            output.provenance,
+            target,
+            inputNum
+        );
+    }
+
+    /**
+     * Binds every Output in a Run before any Worker work is dispatched.
+     *
+     * @param {Object} target - Bound Run target.
+     * @returns {void}
+     */
+    bindRunTarget(target) {
+        const outputs = target?.inputTargets?.map(inputTarget =>
+            this.outputs[inputTarget.outputTabId]
+        );
+        if (!outputs || outputs.length < 1 || outputs.some((output, index) =>
+            !output || output.outputGeneration !== target.inputTargets[index].outputGeneration
+        )) {
+            throw new Error("Run Output target is unavailable");
+        }
+        const bindings = outputs.map((output, index) => ({
+            output,
+            provenance: createOutputProvenance(
+                target,
+                target.inputTargets[index].inputTabId,
+                this.getNextOutputVersion(output)
+            ),
+        }));
+
+        for (const inputTarget of target.inputTargets) {
+            this.manager.background?.invalidateOutputAnalysis(inputTarget.outputTabId);
+        }
+        for (const {output, provenance} of bindings) {
+            output.outputVersion = provenance.outputVersion;
+            output.provenance = provenance;
+            output.bakeId = target.bakeId;
+            output.recipeRevision = target.recipeRevisionAtStart;
+        }
+    }
+
+    /**
+     * Publishes one terminal Output provenance transition.
+     *
+     * @param {Object} target - Bound Run target.
+     * @param {number} inputNum - Input and Output tab identity.
+     * @param {Object} outcome - Fixed Run outcome.
+     * @returns {boolean} Whether the matching Output settled.
+     */
+    settleRunTarget(target, inputNum, outcome) {
+        const output = this.outputs[inputNum];
+        if (!output || output.provenance?.terminalState !== null ||
+            !outputProvenanceMatchesTarget(output.provenance, target, inputNum)) {
+            return false;
+        }
+        const provenance = createOutputProvenance(
+            target,
+            inputNum,
+            this.getNextOutputVersion(output),
+            outcome
+        );
+        output.outputVersion = provenance.outputVersion;
+        output.provenance = provenance;
+        return true;
+    }
+
+    /**
+     * Checks whether an Output independently proves a current completed result.
+     *
+     * @param {number} inputNum - Output tab number.
+     * @returns {boolean} Whether the Output is fresh for the current execution state.
+     */
+    outputIsFresh(inputNum) {
+        const output = this.outputs[inputNum],
+            provenance = output?.provenance,
+            inputState = this.manager.input.getSynchronizedInputState(inputNum);
+        return !!output && !!provenance && provenance.terminalState === RUN_STATE.COMPLETED &&
+            output.status === "baked" && provenance.recipeRevision ===
+                this.manager.recipe.getRecipeRevision() &&
+            provenance.inputTabId === inputState?.inputNum &&
+            provenance.inputGeneration === inputState?.inputGeneration &&
+            provenance.inputRevision === inputState?.inputRevision &&
+            provenance.outputTabId === output.inputNum &&
+            provenance.outputGeneration === output.outputGeneration &&
+            provenance.outputVersion === output.outputVersion &&
+            this.manager.runTargets.executionOptionsAreCurrent(provenance, this.app.options);
+    }
+
+    /**
+     * Waits until the exact active Output version is published to the visible editor.
+     *
+     * @param {Object} provenance - Immutable terminal Output provenance.
+     * @param {AbortSignal|null} [signal=null] - Optional collaboration cancellation signal.
+     * @returns {Promise<boolean>} Whether the same Output version remains visibly published.
+     */
+    async waitForPresentation(provenance, signal=null) {
+        const output = this.outputs[provenance?.outputTabId],
+            presentation = output?.presentation;
+        if (!output || output.provenance !== provenance ||
+            output.outputGeneration !== provenance.outputGeneration ||
+            output.outputVersion !== provenance.outputVersion ||
+            this.manager.tabs.getActiveTab("output") !== provenance.outputTabId ||
+            presentation?.outputGeneration !== provenance.outputGeneration ||
+            presentation?.outputVersion !== provenance.outputVersion) {
+            return false;
+        }
+
+        const published = await awaitWithAbort(presentation.completion, signal);
+
+        return published === true && output.provenance === provenance &&
+            output.presentation === presentation &&
+            this.manager.tabs.getActiveTab("output") === provenance.outputTabId;
+    }
+
+    /**
+     * Checks whether provenance still identifies the fresh visible Output.
+     *
+     * @param {Object|null} provenance - Immutable Output provenance.
+     * @returns {boolean} Whether UI derived from the Output may still be shown or applied.
+     */
+    isCurrentOutputProvenance(provenance) {
+        const outputTabId = provenance?.outputTabId;
+        return Number.isSafeInteger(outputTabId) &&
+            this.manager.tabs.getActiveTab("output") === outputTabId &&
+            this.outputs[outputTabId]?.provenance === provenance &&
+            this.outputIsFresh(outputTabId);
+    }
+
+    /**
+     * Captures a bounded sample only while one fresh visible Output stays current.
+     *
+     * @param {number|null} [bakeId=null] - Optional completed Run identity to require.
+     * @param {AbortSignal|null} [signal=null] - Optional analysis cancellation signal.
+     * @returns {Promise<Object|null>} Immutable provenance and sample, or null when stale.
+     */
+    async captureAnalysisInput(bakeId=null, signal=null) {
+        if (signal?.aborted) throw signal.reason;
+        const inputNum = this.manager.tabs.getActiveTab("output"),
+            provenance = this.outputs[inputNum]?.provenance,
+            dish = this.getOutputDish(inputNum);
+        if (dish === null || bakeId !== null && provenance?.bakeId !== bakeId ||
+            !this.isCurrentOutputProvenance(provenance)) return null;
+
+        const buffer = await awaitWithAbort(this.getDishBuffer(dish), signal);
+        if (!(buffer instanceof ArrayBuffer)) {
+            throw new TypeError("Output analysis input is invalid");
+        }
+        if (bakeId !== null && provenance.bakeId !== bakeId ||
+            !this.isCurrentOutputProvenance(provenance)) return null;
+
+        return Object.freeze({
+            provenance,
+            sample: buffer.slice(0, MAX_ANALYSIS_SAMPLE_BYTES),
+        });
+    }
+
+    /**
+     * Calculates the next result identity owned by one Output record.
+     *
+     * @param {Object} output - Mutable Output record.
+     * @returns {number} Next Output version.
+     */
+    getNextOutputVersion(output) {
+        if (output.outputVersion === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("Output version limit reached");
+        }
+        return output.outputVersion + 1;
+    }
+
+    /**
+     * Allocates a non-reused Output generation for this page lifecycle.
+     *
+     * @returns {number} Output generation.
+     */
+    createOutputGeneration() {
+        if (this.nextOutputGeneration === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("Output generation limit reached");
+        }
+        return this.nextOutputGeneration++;
+    }
+
+    /**
      * Adds a new output to the output array.
      * Creates a new tab if we have less than maxtabs tabs open
      *
@@ -525,13 +814,18 @@ class OutputWaiter {
         const newOutput = {
             data: null,
             inputNum: inputNum,
+            outputGeneration: this.createOutputGeneration(),
+            outputVersion: 0,
+            provenance: null,
             statusMessage: `Input ${inputNum} has not been baked yet.`,
             error: null,
             status: "inactive",
             bakeId: -1,
+            recipeRevision: null,
             progress: false,
             encoding: 0,
-            eolSequence: "\u000a"
+            eolSequence: "\u000a",
+            presentation: null
         };
 
         this.outputs[inputNum] = newOutput;
@@ -546,8 +840,10 @@ class OutputWaiter {
      * @param {ArrayBuffer | String} data
      * @param {number} inputNum
      * @param {boolean} set
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputValue(data, inputNum, set=true) {
+    updateOutputValue(data, inputNum, set=true, target=null) {
+        if (target !== null && !this.acceptsRunTarget(inputNum, target)) return;
         if (!this.outputExists(inputNum)) {
             this.addOutput(inputNum);
         }
@@ -571,9 +867,10 @@ class OutputWaiter {
      * @param {string} statusMessage
      * @param {number} inputNum
      * @param {boolean} [set=true]
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputMessage(statusMessage, inputNum, set=true) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputMessage(statusMessage, inputNum, set=true, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].statusMessage = statusMessage;
         if (set) this.set(inputNum);
     }
@@ -586,15 +883,16 @@ class OutputWaiter {
      * @param {Error} error
      * @param {number} inputNum
      * @param {number} [progress=0]
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputError(error, inputNum, progress=0) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputError(error, inputNum, progress=0, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
 
         const errorString = error.displayStr || error.toString();
 
         this.outputs[inputNum].error = errorString;
         this.outputs[inputNum].progress = progress;
-        this.updateOutputStatus("error", inputNum);
+        this.updateOutputStatus("error", inputNum, target);
     }
 
     /**
@@ -602,10 +900,14 @@ class OutputWaiter {
      *
      * @param {string} status
      * @param {number} inputNum
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputStatus(status, inputNum) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputStatus(status, inputNum, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].status = status;
+        if (inputNum === this.manager.tabs.getActiveTab("output") && status !== "baked") {
+            this.hideMagicButton();
+        }
 
         if (status !== "error") {
             delete this.outputs[inputNum].error;
@@ -615,15 +917,59 @@ class OutputWaiter {
         this.set(inputNum);
     }
 
+
     /**
-     * Updates the stored bake ID for the output in the output array
+     * Marks every existing Output as older than the current Recipe.
+     */
+    markRecipeStale() {
+        this.outputRenderGeneration++;
+        this.hideMagicButton();
+        this.manager.background?.invalidateAnalysis();
+        for (const [inputNum, output] of Object.entries(this.outputs)) {
+            output.status = "stale";
+            this.displayTabInfo(inputNum);
+        }
+        this.manager.controls.showStaleIndicator();
+    }
+
+    /**
+     * Marks only the Outputs that still belong to a stale Run target.
+     *
+     * @param {Object|null} target - Stale workspace execution target.
+     * @returns {void}
+     */
+    markRunTargetStale(target) {
+        if (!target?.inputTargets) return;
+        const activeOutputTabId = this.manager.tabs.getActiveTab("output");
+        let changed = false,
+            activeOutputChanged = false;
+        for (const inputTarget of target.inputTargets) {
+            const output = this.outputs[inputTarget.outputTabId];
+            if (!output || output.outputGeneration !== inputTarget.outputGeneration) continue;
+            output.status = "stale";
+            this.manager.background?.invalidateOutputAnalysis(inputTarget.outputTabId);
+            this.displayTabInfo(inputTarget.outputTabId);
+            changed = true;
+            if (inputTarget.outputTabId === activeOutputTabId) activeOutputChanged = true;
+        }
+        if (changed) {
+            this.outputRenderGeneration++;
+            if (activeOutputChanged) this.hideMagicButton();
+            this.manager.controls.showStaleIndicator();
+        }
+    }
+
+    /**
+     * Updates the stored Bake and Recipe identity for an Output.
      *
      * @param {number} bakeId
+     * @param {number} recipeRevision
      * @param {number} inputNum
      */
-    updateOutputBakeId(bakeId, inputNum) {
+    updateOutputBakeTarget(bakeId, recipeRevision, inputNum) {
         if (!this.outputExists(inputNum)) return;
         this.outputs[inputNum].bakeId = bakeId;
+        this.outputs[inputNum].recipeRevision = recipeRevision;
     }
 
     /**
@@ -632,9 +978,10 @@ class OutputWaiter {
      * @param {number} progress
      * @param {number} total
      * @param {number} inputNum
+     * @param {Object|null} [target=null] - Optional bound Run target.
      */
-    updateOutputProgress(progress, total, inputNum) {
-        if (!this.outputExists(inputNum)) return;
+    updateOutputProgress(progress, total, inputNum, target=null) {
+        if (!this.acceptsRunTarget(inputNum, target)) return;
         this.outputs[inputNum].progress = progress;
 
         if (progress !== false) {
@@ -651,6 +998,8 @@ class OutputWaiter {
     removeOutput(inputNum) {
         if (!this.outputExists(inputNum)) return;
 
+        this.manager.background?.invalidateOutputAnalysis(inputNum);
+        this.outputRenderGeneration++;
         delete this.outputs[inputNum];
     }
 
@@ -658,6 +1007,8 @@ class OutputWaiter {
      * Removes all output tabs
      */
     removeAllOutputs() {
+        this.manager.background?.invalidateAnalysis();
+        this.outputRenderGeneration++;
         this.outputs = {};
 
         const tabsList = document.getElementById("output-tabs");
@@ -674,87 +1025,112 @@ class OutputWaiter {
      * Sets the output in the output pane.
      *
      * @param {number} inputNum
+     * @returns {Promise<boolean>} Whether the selected Output remains visibly published.
      */
-    async set(inputNum) {
+    set(inputNum) {
         inputNum = parseInt(inputNum, 10);
         if (inputNum !== this.manager.tabs.getActiveTab("output") ||
-            !this.outputExists(inputNum)) return;
+            !this.outputExists(inputNum)) return Promise.resolve(false);
+        const renderGeneration = ++this.outputRenderGeneration;
         this.toggleLoader(true);
 
-        return new Promise(async function(resolve, reject) {
-            const output = this.outputs[inputNum];
-            this.manager.timing.recordTime("settingOutput", inputNum);
+        const output = this.outputs[inputNum],
+            completion = this.renderOutput(output, inputNum, renderGeneration);
+        output.presentation = Object.freeze({
+            outputGeneration: output.outputGeneration,
+            outputVersion: output.outputVersion,
+            completion,
+        });
+        return completion;
+    }
 
-            // Update the EOL value
+    /**
+     * Publishes one Output record to the visible editor.
+     *
+     * @param {Object} output - Output record selected for presentation.
+     * @param {number} inputNum - Active Output tab identity.
+     * @param {number} renderGeneration - In-flight Output render identity.
+     * @returns {Promise<boolean>} Whether this render remains visibly published.
+     */
+    async renderOutput(output, inputNum, renderGeneration) {
+        this.manager.timing.recordTime("settingOutput", inputNum);
+
+        // Update the EOL value
+        this.outputEditorView.dispatch({
+            effects: this.outputEditorConf.eol.reconfigure(
+                EditorState.lineSeparator.of(output.eolSequence)
+            )
+        });
+
+        // If pending or baking, show loader and status message
+        // If error, style the tab and handle the error
+        // If done, display the output if it's the active tab
+        // If inactive, show the last bake value (or blank)
+        const stale = output.status === "inactive" || output.status === "stale" ||
+                (output.status === "baked" && !this.outputIsFresh(inputNum));
+        if (stale) {
+            this.manager.controls.showStaleIndicator();
+        } else {
+            this.manager.controls.hideStaleIndicator();
+        }
+
+        if (output.progress !== undefined && !this.app.baking) {
+            this.manager.recipe.updateBreakpointIndicator(output.progress);
+        } else {
+            this.manager.recipe.updateBreakpointIndicator(false);
+        }
+
+        if (output.status === "pending" || output.status === "baking") {
+            // show the loader and the status message if it's being shown
+            // otherwise don't do anything
+            document.querySelector("#output-loader .loading-msg").textContent = output.statusMessage;
+        } else if (output.status === "error") {
+            this.clearHTMLOutput();
+
+            if (output.error) {
+                return await this.setOutput(output.error, false, renderGeneration);
+            }
+            return await this.setOutput(output.data.result, false, renderGeneration);
+        } else if (output.status === "baked" || output.status === "inactive" ||
+                output.status === "stale") {
+            document.querySelector("#output-loader .loading-msg").textContent = `Loading output ${inputNum}`;
+
+            if (output.data === null) {
+                this.clearHTMLOutput();
+                return await this.setOutput("", false, renderGeneration);
+            }
+
+            let published;
+            switch (output.data.type) {
+                case "html":
+                    published = await this.setHTMLOutput(output.data.result, renderGeneration);
+                    break;
+                case "ArrayBuffer":
+                case "string":
+                default:
+                    this.clearHTMLOutput();
+                    published = await this.setOutput(
+                        output.data.result,
+                        false,
+                        renderGeneration
+                    );
+                    break;
+            }
+            if (!published || renderGeneration !== this.outputRenderGeneration) return false;
+            if (stale) this.manager.controls.showStaleIndicator();
+            this.manager.timing.recordTime("complete", inputNum);
+
+            // Trigger an update so that the status bar recalculates timings
             this.outputEditorView.dispatch({
-                effects: this.outputEditorConf.eol.reconfigure(
-                    EditorState.lineSeparator.of(output.eolSequence)
-                )
+                changes: {
+                    from: 0,
+                    to: 0
+                }
             });
 
-            // If pending or baking, show loader and status message
-            // If error, style the tab and handle the error
-            // If done, display the output if it's the active tab
-            // If inactive, show the last bake value (or blank)
-            if (output.status === "inactive" ||
-                output.status === "stale" ||
-                (output.status === "baked" && output.bakeId < this.manager.worker.bakeId)) {
-                this.manager.controls.showStaleIndicator();
-            } else {
-                this.manager.controls.hideStaleIndicator();
-            }
-
-            if (output.progress !== undefined && !this.app.baking) {
-                this.manager.recipe.updateBreakpointIndicator(output.progress);
-            } else {
-                this.manager.recipe.updateBreakpointIndicator(false);
-            }
-
-            if (output.status === "pending" || output.status === "baking") {
-                // show the loader and the status message if it's being shown
-                // otherwise don't do anything
-                document.querySelector("#output-loader .loading-msg").textContent = output.statusMessage;
-            } else if (output.status === "error") {
-                this.clearHTMLOutput();
-
-                if (output.error) {
-                    await this.setOutput(output.error);
-                } else {
-                    await this.setOutput(output.data.result);
-                }
-            } else if (output.status === "baked" || output.status === "inactive") {
-                document.querySelector("#output-loader .loading-msg").textContent = `Loading output ${inputNum}`;
-
-                if (output.data === null) {
-                    this.clearHTMLOutput();
-                    await this.setOutput("");
-                    return;
-                }
-
-                switch (output.data.type) {
-                    case "html":
-                        await this.setHTMLOutput(output.data.result);
-                        break;
-                    case "ArrayBuffer":
-                    case "string":
-                    default:
-                        this.clearHTMLOutput();
-                        await this.setOutput(output.data.result);
-                        break;
-                }
-                this.manager.timing.recordTime("complete", inputNum);
-
-                // Trigger an update so that the status bar recalculates timings
-                this.outputEditorView.dispatch({
-                    changes: {
-                        from: 0,
-                        to: 0
-                    }
-                });
-
-                debounce(this.backgroundMagic, 50, "backgroundMagic", this, [])();
-            }
-        }.bind(this));
+            debounce(this.backgroundMagic, 50, "backgroundMagic", this, [])();
+        }
+        return renderGeneration === this.outputRenderGeneration;
     }
 
     /**
@@ -837,39 +1213,49 @@ class OutputWaiter {
     toggleLoader(value) {
         const outputLoader = document.getElementById("output-loader"),
             animation = document.getElementById("output-loader-animation");
+        this.loaderRequested = value;
 
         if (value) {
             this.manager.controls.hideStaleIndicator();
+            clearTimeout(this.removeBombeTimeout);
+            this.removeBombeTimeout = null;
+
             // Don't add the bombe if it's already there or scheduled to be loaded
             if (animation.children.length === 0 && !this.appendBombeTimeout) {
                 // Start a timer to add the Bombe to the DOM just before we make it
                 // visible so that there is no stuttering
-                this.appendBombeTimeout = setTimeout(function() {
+                this.appendBombeTimeout = setTimeout(() => {
                     this.appendBombeTimeout = null;
-                    animation.appendChild(this.bombeEl);
-                }.bind(this), 150);
+                    if (this.loaderRequested && !animation.contains(this.bombeEl)) {
+                        animation.appendChild(this.bombeEl);
+                    }
+                }, 150);
             }
 
-            if (outputLoader.style.visibility !== "visible" && !this.outputLoaderTimeout) {
+            if (outputLoader.style.visibility !== "visible" && !this.showOutputLoaderTimeout) {
                 // Show the loading screen
-                this.outputLoaderTimeout = setTimeout(function() {
-                    this.outputLoaderTimeout = null;
+                this.showOutputLoaderTimeout = setTimeout(() => {
+                    this.showOutputLoaderTimeout = null;
+                    if (!this.loaderRequested) return;
                     outputLoader.style.visibility = "visible";
                     outputLoader.style.opacity = 1;
                 }, 200);
             }
-        } else if (outputLoader.style.visibility !== "hidden" || this.appendBombeTimeout || this.outputLoaderTimeout) {
+        } else {
             clearTimeout(this.appendBombeTimeout);
-            clearTimeout(this.outputLoaderTimeout);
+            clearTimeout(this.showOutputLoaderTimeout);
             this.appendBombeTimeout = null;
-            this.outputLoaderTimeout = null;
+            this.showOutputLoaderTimeout = null;
 
-            // Remove the Bombe from the DOM to save resources
-            this.outputLoaderTimeout = setTimeout(function () {
-                this.outputLoaderTimeout = null;
-                if (animation.children.length > 0)
-                    animation.removeChild(this.bombeEl);
-            }.bind(this), 500);
+            if (animation.contains(this.bombeEl) && !this.removeBombeTimeout) {
+                // Remove the Bombe after the fade-out only if no newer request needs it.
+                this.removeBombeTimeout = setTimeout(() => {
+                    this.removeBombeTimeout = null;
+                    if (!this.loaderRequested && animation.contains(this.bombeEl)) {
+                        animation.removeChild(this.bombeEl);
+                    }
+                }, 500);
+            }
             outputLoader.style.opacity = 0;
             outputLoader.style.visibility = "hidden";
         }
@@ -943,7 +1329,8 @@ class OutputWaiter {
         for (let i = 0; i < inputNums.length; i++) {
             const iNum = inputNums[i];
             if (this.outputs[iNum].status !== "baked" ||
-            this.outputs[iNum].bakeId !== this.manager.worker.bakeId) {
+                this.outputs[iNum].bakeId !== this.manager.worker.bakeId ||
+                this.outputs[iNum].recipeRevision !== this.manager.recipe.getRecipeRevision()) {
                 const continueDownloading = await new Promise(function(resolve, reject) {
                     this.app.confirm(
                         "Incomplete outputs",
@@ -1055,7 +1442,7 @@ class OutputWaiter {
 
         if (!this.manager.tabs.getTabItem(inputNum, "output") && numTabs < this.maxTabs) {
             // Create a new tab element
-            const newTab = this.manager.tabs.createTabElement(inputNum, changeTab, "output");
+            const newTab = this.manager.tabs.createTabElement(inputNum, false, "output");
             tabsWrapper.appendChild(newTab);
         } else if (numTabs === this.maxTabs) {
             // Can't create a new tab
@@ -1080,6 +1467,9 @@ class OutputWaiter {
         const currentNum = this.manager.tabs.getActiveTab("output");
 
         this.hideMagicButton();
+        if (currentNum !== inputNum) {
+            this.manager.background?.invalidateOutputAnalysis(currentNum);
+        }
 
         if (!this.manager.tabs.changeTab(inputNum, "output")) {
             let direction = "right";
@@ -1354,11 +1744,19 @@ class OutputWaiter {
         // Don't display anything if there are no, or only one, tabs
         if (!this.outputExists(inputNum) || Object.keys(this.outputs).length <= 1) return;
 
-        const dish = this.getOutputDish(inputNum);
+        const output = this.outputs[inputNum],
+            outputStatus = output.status,
+            outputBakeId = output.bakeId,
+            outputRecipeRevision = output.recipeRevision,
+            outputVersion = output.outputVersion,
+            dish = this.getOutputDish(inputNum);
         let tabStr = "";
 
         if (dish !== null) {
-            tabStr = await this.getDishTitle(this.getOutputDish(inputNum), 100);
+            tabStr = await this.getDishTitle(dish, 100);
+            if (this.outputs[inputNum] !== output || output.status !== outputStatus ||
+                output.bakeId !== outputBakeId || output.recipeRevision !== outputRecipeRevision ||
+                output.outputVersion !== outputVersion) return;
             tabStr = tabStr.replace(/[\n\r]/g, "");
         }
         this.manager.tabs.updateTabHeader(inputNum, tabStr, "output");
@@ -1381,13 +1779,20 @@ class OutputWaiter {
      */
     async backgroundMagic() {
         this.hideMagicButton();
-        const dish = this.getOutputDish(this.manager.tabs.getActiveTab("output"));
-        if (!this.app.options.autoMagic || dish === null) return;
-        const buffer = await this.getDishBuffer(dish);
-        const sample = buffer.slice(0, 1000) || "";
+        if (!this.app.options.autoMagic) return;
+        const analysisInput = await this.captureAnalysisInput();
+        if (!analysisInput || !analysisInput.sample.byteLength) return;
+        const {provenance, sample} = analysisInput;
 
-        if (sample.length || sample.byteLength) {
-            this.manager.background.magic(sample);
+        const request = this.manager.background.magic(
+                sample,
+                provenance,
+                ANALYSIS_OWNER.UI
+            ),
+            completion = request.completion ? await request.completion : null;
+        if (completion?.analysis.terminalState === ANALYSIS_STATE.SIGNALS_READY &&
+            this.app.options.autoMagic && this.isCurrentOutputProvenance(provenance)) {
+            this.backgroundMagicResult(completion.value, provenance);
         }
     }
 
@@ -1395,9 +1800,11 @@ class OutputWaiter {
      * Handles the results of a background Magic call.
      *
      * @param {Object[]} options
+     * @param {Object} provenance - Output provenance used for the analysis.
      */
-    backgroundMagicResult(options) {
-        if (!options.length) return;
+    backgroundMagicResult(options, provenance) {
+        if (!Array.isArray(options) || !options.length ||
+            !this.isCurrentOutputProvenance(provenance)) return;
 
         const currentRecipeConfig = this.app.getRecipeConfig();
         let msg = "",
@@ -1415,7 +1822,7 @@ class OutputWaiter {
             return;
         }
 
-        this.showMagicButton(msg, newRecipeConfig);
+        this.showMagicButton(msg, newRecipeConfig, provenance);
     }
 
     /**
@@ -1423,12 +1830,18 @@ class OutputWaiter {
      *
      * Loads the Magic recipe.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      */
     magicClick() {
         const magicButton = document.getElementById("magic");
-        this.app.setRecipeConfig(JSON.parse(magicButton.getAttribute("data-recipe")));
-        window.dispatchEvent(this.manager.statechange);
+        if (!this.isCurrentOutputProvenance(this.magicButtonProvenance)) {
+            this.hideMagicButton();
+            return;
+        }
+        this.app.setRecipeConfig(
+            JSON.parse(magicButton.getAttribute("data-recipe")),
+            RECIPE_TRANSACTION_SOURCE.MAGIC
+        );
         this.hideMagicButton();
     }
 
@@ -1437,9 +1850,12 @@ class OutputWaiter {
      *
      * @param {string} msg
      * @param {Object[]} recipeConfig
+     * @param {Object} provenance - Output provenance used to create the suggestion.
      */
-    showMagicButton(msg, recipeConfig) {
+    showMagicButton(msg, recipeConfig, provenance) {
+        if (!this.isCurrentOutputProvenance(provenance)) return;
         const magicButton = document.getElementById("magic");
+        this.magicButtonProvenance = provenance;
         magicButton.setAttribute("data-original-title", msg);
         magicButton.setAttribute("data-recipe", JSON.stringify(recipeConfig), null, "");
         magicButton.classList.remove("hidden");
@@ -1452,6 +1868,7 @@ class OutputWaiter {
      */
     hideMagicButton() {
         const magicButton = document.getElementById("magic");
+        this.magicButtonProvenance = null;
         magicButton.classList.add("hidden");
         magicButton.classList.remove("pulse");
         magicButton.setAttribute("data-recipe", "");

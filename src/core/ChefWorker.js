@@ -18,6 +18,7 @@ self.chef = new Chef();
 self.OpModules = OpModules;
 self.OperationConfig = OperationConfig;
 self.inputNum = -1;
+self.runToken = null;
 
 
 // Tell the app that the worker has loaded and is ready to operate
@@ -27,23 +28,9 @@ self.postMessage({
 });
 
 /**
- * Respond to message from parent thread.
+ * Responds to page commands and preserves request identity in asynchronous replies.
  *
- * inputNum is optional and only used for baking multiple inputs.
- * Defaults to -1 when one isn't sent with the bake message.
- *
- * Messages should have the following format:
- * {
- *     action: "bake" | "silentBake",
- *     data: {
- *         input: {string},
- *         recipeConfig: {[Object]},
- *         options: {Object},
- *         progress: {number},
- *         step: {boolean},
- *         [inputNum=-1]: {number}
- *     }
- * }
+ * @param {MessageEvent} e - Page command.
  */
 self.addEventListener("message", function(e) {
     // Handle message
@@ -69,11 +56,7 @@ self.addEventListener("message", function(e) {
             self.docURL = r.data;
             break;
         case "highlight":
-            calculateHighlights(
-                r.data.recipeConfig,
-                r.data.direction,
-                r.data.pos
-            );
+            calculateHighlights(r.data);
             break;
         case "setLogLevel":
             log.setLevel(r.data, false);
@@ -91,15 +74,33 @@ self.addEventListener("message", function(e) {
 
 
 /**
+ * Copies the current Run identity into one Worker response.
+ *
+ * @returns {Object} Run identity fields.
+ */
+function getRunTokenData() {
+    return {
+        bakeId: self.runToken?.bakeId,
+        recipeRevisionAtStart: self.runToken?.recipeRevisionAtStart,
+        inputNum: self.inputNum,
+    };
+}
+
+
+/**
  * Baking handler
  *
  * @param {Object} data
  */
 async function bake(data) {
-    // Ensure the relevant modules are loaded
-    self.loadRequiredModules(data.recipeConfig);
+    self.inputNum = data.inputNum === undefined ? -1 : data.inputNum;
+    self.runToken = Object.freeze({
+        bakeId: data.bakeId,
+        recipeRevisionAtStart: data.recipeRevisionAtStart,
+    });
     try {
-        self.inputNum = data.inputNum === undefined ? -1 : data.inputNum;
+        // Module loading can emit status messages, so establish the Run identity first.
+        self.loadRequiredModules(data.recipeConfig);
         const response = await self.chef.bake(
             data.input,          // The user's input
             data.recipeConfig,   // The configuration of the recipe
@@ -112,10 +113,8 @@ async function bake(data) {
 
         self.postMessage({
             action: "bakeComplete",
-            data: Object.assign(response, {
+            data: Object.assign(response, getRunTokenData(), {
                 id: data.id,
-                inputNum: data.inputNum,
-                bakeId: data.bakeId
             })
         }, transferable);
 
@@ -125,24 +124,41 @@ async function bake(data) {
             data: {
                 error: err.message || err,
                 id: data.id,
-                inputNum: data.inputNum
+                ...getRunTokenData(),
             }
         });
     }
     self.inputNum = -1;
+    self.runToken = null;
 }
 
 
 /**
  * Silent baking handler
  */
-function silentBake(data) {
-    const duration = self.chef.silentBake(data.recipeConfig);
+async function silentBake(data) {
+    try {
+        const duration = await self.chef.silentBake(data.recipeConfig);
 
-    self.postMessage({
-        action: "silentBakeComplete",
-        data: duration
-    });
+        self.postMessage({
+            action: "silentBakeComplete",
+            data: {
+                duration: duration,
+                silentBakeId: data.silentBakeId,
+                bakeId: data.bakeId,
+                recipeRevisionAtStart: data.recipeRevisionAtStart,
+            }
+        });
+    } catch {
+        self.postMessage({
+            action: "silentBakeError",
+            data: {
+                silentBakeId: data.silentBakeId,
+                bakeId: data.bakeId,
+                recipeRevisionAtStart: data.recipeRevisionAtStart,
+            }
+        });
+    }
 }
 
 
@@ -185,18 +201,24 @@ async function getDishTitle(data) {
 /**
  * Calculates highlight offsets if possible.
  *
- * @param {Object[]} recipeConfig
- * @param {string} direction
- * @param {Object[]} pos - The position object for the highlight.
- * @param {number} pos.start - The start offset.
- * @param {number} pos.end - The end offset.
+ * @param {Object} data - Highlight request and identity.
  */
-async function calculateHighlights(recipeConfig, direction, pos) {
-    pos = await self.chef.calculateHighlights(recipeConfig, direction, pos);
+async function calculateHighlights(data) {
+    let result = null;
+    try {
+        result = await self.chef.calculateHighlights(data.recipeConfig, data.direction, data.pos);
+    } catch (err) {
+        // Highlighting is optional and must still settle its request identity.
+    }
 
     self.postMessage({
         action: "highlightsCalculated",
-        data: pos
+        data: {
+            pos: result?.pos ?? null,
+            direction: result?.direction ?? data.direction,
+            highlightId: data.highlightId,
+            recipeRevisionAtStart: data.recipeRevisionAtStart,
+        }
     });
 }
 
@@ -230,7 +252,7 @@ self.sendStatusMessage = function(msg) {
         action: "statusMessage",
         data: {
             message: msg,
-            inputNum: self.inputNum
+            ...getRunTokenData(),
         }
     });
 };
@@ -248,7 +270,7 @@ self.sendProgressMessage = function(progress, total) {
         data: {
             progress: progress,
             total: total,
-            inputNum: self.inputNum
+            ...getRunTokenData(),
         }
     });
 };
@@ -265,7 +287,8 @@ self.setOption = function(option, value) {
         action: "optionUpdate",
         data: {
             option: option,
-            value: value
+            value: value,
+            ...getRunTokenData(),
         }
     });
 };
@@ -284,7 +307,8 @@ self.setRegisters = function(opIndex, numPrevRegisters, registers) {
         data: {
             opIndex: opIndex,
             numPrevRegisters: numPrevRegisters,
-            registers: registers
+            registers: registers,
+            ...getRunTokenData(),
         }
     });
 };

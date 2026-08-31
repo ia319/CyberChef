@@ -1556,7 +1556,7 @@ export function sendStatusMessage(msg) {
         console.debug(msg);
 }
 
-const debounceTimeouts = {};
+const debounceTimeouts = new Map();
 
 /**
  * Debouncer to stop functions from being executed multiple times in a
@@ -1572,12 +1572,27 @@ const debounceTimeouts = {};
  */
 export function debounce(func, wait, id, scope, args) {
     return function() {
-        const later = function() {
+        clearTimeout(debounceTimeouts.get(id));
+        const timeout = setTimeout(function() {
+            if (debounceTimeouts.get(id) === timeout) debounceTimeouts.delete(id);
             func.apply(scope, args);
-        };
-        clearTimeout(debounceTimeouts[id]);
-        debounceTimeouts[id] = setTimeout(later, wait);
+        }, wait);
+        debounceTimeouts.set(id, timeout);
     };
+}
+
+
+/**
+ * Cancels one pending debounced operation.
+ *
+ * @param {string} id - Debounce identifier.
+ * @returns {boolean} Whether a pending operation was cancelled.
+ */
+export function cancelDebounce(id) {
+    if (!debounceTimeouts.has(id)) return false;
+    clearTimeout(debounceTimeouts.get(id));
+    debounceTimeouts.delete(id);
+    return true;
 }
 
 

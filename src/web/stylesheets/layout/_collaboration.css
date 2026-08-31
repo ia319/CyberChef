@@ -1,0 +1,72 @@
+/**
+ * WebMCP Recipe access styles
+ *
+ * @license Apache-2.0
+ */
+
+#webmcp-collaboration {
+    width: 100%;
+    padding: 8px 12px 0;
+    border-top: 1px solid var(--primary-border-colour);
+    color: var(--primary-font-colour);
+    font-size: 12px;
+}
+
+.webmcp-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.webmcp-session-state,
+.webmcp-step-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: 1px solid var(--primary-border-colour);
+    border-radius: 10px;
+    background-color: var(--secondary-background-colour);
+    color: var(--primary-font-colour);
+    font-size: 11px;
+    font-weight: normal;
+}
+
+.webmcp-actions {
+    display: flex;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    gap: 6px;
+}
+
+#webmcp-collaboration .webmcp-actions .btn {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+.webmcp-copy,
+.webmcp-tool-list,
+.webmcp-change-summary,
+.webmcp-revert-state,
+.webmcp-live-status {
+    margin: 4px 0 0;
+    line-height: 1.35;
+}
+
+.webmcp-tool-list,
+.webmcp-revert-state {
+    color: var(--subtext-font-colour);
+}
+
+.webmcp-change-summary {
+    font-weight: 500;
+}
+
+.webmcp-live-status {
+    min-height: 1.35em;
+}
+
+.webmcp-step-badge {
+    vertical-align: middle;
+}

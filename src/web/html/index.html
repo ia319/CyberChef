@@ -218,6 +218,26 @@
                                 </div>
                             </div>
                         </div>
+
+                        <section id="webmcp-collaboration" hidden aria-labelledby="webmcp-heading">
+                            <div class="webmcp-header">
+                                <div>
+                                    <strong id="webmcp-heading">WebMCP Recipe access</strong>
+                                    <span id="webmcp-session-state" class="webmcp-session-state">Off</span>
+                                </div>
+                                <div class="webmcp-actions">
+                                    <button type="button" class="btn btn-sm btn-primary" id="webmcp-start" aria-label="Start WebMCP Recipe access">Start</button>
+                                    <button type="button" class="btn btn-sm btn-secondary" id="webmcp-stop" aria-label="Stop WebMCP Recipe access" hidden>Stop</button>
+                                    <button type="button" class="btn btn-sm btn-secondary" id="webmcp-revert" aria-label="Revert the latest WebMCP Recipe change" aria-describedby="webmcp-revert-state" disabled>Revert change</button>
+                                </div>
+                            </div>
+                            <p id="webmcp-profile-summary" class="webmcp-copy"></p>
+                            <p id="webmcp-tool-list" class="webmcp-tool-list"></p>
+                            <p class="webmcp-copy">Tool results exclude raw Input and Output, current Recipe argument values, Comments, Registers, and Magic previews. The browser host can still observe content visible on this page. Stopping access keeps Recipe changes already applied.</p>
+                            <p id="webmcp-change-summary" class="webmcp-change-summary">No WebMCP Recipe change has been applied on this page.</p>
+                            <p id="webmcp-revert-state" class="webmcp-revert-state">No WebMCP Recipe change is available to restore.</p>
+                            <p id="webmcp-live-status" class="webmcp-live-status" role="status" aria-live="polite" aria-atomic="true">WebMCP Recipe access is off.</p>
+                        </section>
                     </div>
                 </div>
 

@@ -4,7 +4,8 @@
  * @license Apache-2.0
  */
 
-import Utils, { debounce } from "../core/Utils.mjs";
+import Utils, {cancelDebounce, debounce} from "../core/Utils.mjs";
+import {RUN_TARGET_SOURCE} from "./run/RunTargetBuilder.mjs";
 import {fromBase64} from "../core/lib/Base64.mjs";
 import Manager from "./Manager.mjs";
 import HTMLCategory from "./HTMLCategory.mjs";
@@ -12,6 +13,7 @@ import HTMLOperation from "./HTMLOperation.mjs";
 import Split from "split.js";
 import moment from "moment-timezone";
 import cptable from "codepage";
+import {RECIPE_TRANSACTION_SOURCE} from "./recipe/RecipeTransaction.mjs";
 
 
 /**
@@ -106,7 +108,7 @@ class App {
             document.body.classList.remove("loaded");
 
             // Bake initial input
-            this.manager.input.bakeAll();
+            this.manager.input.bakeAll(RUN_TARGET_SOURCE.INITIAL);
         }.bind(this), 1000);
 
         // Clear the loading message interval
@@ -138,11 +140,11 @@ class App {
     /**
      * Asks the ChefWorker to bake the current input using the current recipe.
      *
-     * @param {boolean} [step] - Set to true if we should only execute one operation instead of the
-     *   whole recipe.
+     * @param {Object} target - Immutable workspace execution target.
+     * @param {Object|null} [runRequest=null] - Optional prepared Run request.
      */
-    bake(step=false) {
-        if (this.baking) return;
+    bake(target, runRequest=null) {
+        if (this.baking) return null;
 
         // Record which state version this bake is covering.
         this.bakeStateId = this.stateChangeId;
@@ -153,19 +155,21 @@ class App {
         // Remove all current indicators
         this.manager.recipe.updateBreakpointIndicator(false);
 
-        this.manager.worker.bake(
+        return this.manager.worker.bake(
             this.getRecipeConfig(), // The configuration of the recipe
-            this.options,           // Options set by the user
-            this.progress,          // The current position in the recipe
-            step                    // Whether or not to take one step or execute the whole recipe
+            target,
+            runRequest
         );
     }
 
 
     /**
      * Runs Auto Bake if it is set.
+     *
+     * @param {number|null} [inputNum=null] - Input associated with the state change.
+     * @returns {void}
      */
-    autoBake() {
+    autoBake(inputNum=null) {
         if (this.baking) {
             this.manager.worker.cancelBakeForAutoBake();
             this.baking = false;
@@ -173,10 +177,8 @@ class App {
 
         if (this.autoBake_) {
             log.debug("Auto-baking");
-            this.manager.worker.bakeInputs({
-                nums: [this.manager.tabs.getActiveTab("input")],
-                step: false
-            });
+            const targetInputNum = inputNum ?? this.manager.tabs.getActiveTab("input");
+            this.manager.input.autoBake(targetInputNum);
         } else if (this.bakeStateId < this.stateChangeId) {
             // Only show stale-indicator if the most recent bake didn't cover the
             // current state. Without this guard, a debounced autoBake firing after
@@ -189,7 +191,15 @@ class App {
     /**
      * Executes the next step of the recipe.
      */
-    step() {
+    async step() {
+        if (this.baking) return;
+
+        try {
+            await this.manager.input.flushActiveInputForBake();
+        } catch (err) {
+            this.handleError(err, true);
+            return;
+        }
         if (this.baking) return;
 
         // Reset status using cancelBake
@@ -244,15 +254,17 @@ class App {
         // If there isn't one, assume there are no inputs so use inputNum of 1
         let inputNum = this.manager.tabs.getActiveTab("input");
         if (inputNum === -1) inputNum = 1;
-        this.manager.input.updateInputValue(inputNum, input);
-
-        this.manager.input.inputWorker.postMessage({
-            action: "setInput",
-            data: {
-                inputNum: inputNum,
-                silent: true
-            }
-        });
+        this.manager.input.updateInputValue(inputNum, input)
+            .then(() => {
+                this.manager.input.inputWorker.postMessage({
+                    action: "setInput",
+                    data: {
+                        inputNum: inputNum,
+                        silent: true
+                    }
+                });
+            })
+            .catch(err => this.handleError(err, true));
     }
 
 
@@ -485,6 +497,7 @@ class App {
      *
      * @param {Object} params
      * @fires Manager#statechange
+     * @fires Window#recipechange
      */
     loadURIParams(params=this.getURIParams()) {
         this.uriParams = params;
@@ -493,17 +506,20 @@ class App {
         if (this.uriParams.recipe) {
             try {
                 const recipeConfig = Utils.parseRecipeConfig(this.uriParams.recipe);
-                this.setRecipeConfig(recipeConfig);
+                this.setRecipeConfig(recipeConfig, RECIPE_TRANSACTION_SOURCE.URL);
             } catch (err) {}
         } else if (this.uriParams.op) {
             // If there's no recipe, look for single operations
-            this.manager.recipe.clearRecipe();
+            this.manager.recipe.batchDOMChanges(() => {
+                this.manager.recipe.clearRecipe();
 
-            // Search for nearest match and add it
-            const matchedOps = this.manager.ops.filterOperations(this.uriParams.op, false);
-            if (matchedOps.length) {
-                this.manager.recipe.addOperation(matchedOps[0].name);
-            }
+                // Search for nearest match and add it
+                const matchedOps = this.manager.ops.filterOperations(this.uriParams.op, false);
+                if (matchedOps.length) {
+                    this.manager.recipe.addOperation(matchedOps[0].name);
+                }
+            });
+            this.manager.recipe.commitSystemDOMChange(RECIPE_TRANSACTION_SOURCE.URL);
 
             // Populate search with the string
             const search = document.getElementById("search");
@@ -582,45 +598,54 @@ class App {
     /**
      * Given a recipe configuration, sets the recipe to that configuration.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {Object[]} recipeConfig - The recipe configuration
+     * @param {string} [source=RECIPE_TRANSACTION_SOURCE.API] - Trusted Recipe replacement source.
      */
-    setRecipeConfig(recipeConfig) {
-        document.getElementById("rec-list").innerHTML = null;
+    setRecipeConfig(recipeConfig, source=RECIPE_TRANSACTION_SOURCE.API) {
+        this.manager.recipe.batchDOMChanges(() => {
+            document.getElementById("rec-list").innerHTML = null;
 
-        for (let i = 0; i < recipeConfig.length; i++) {
-            const item = this.manager.recipe.addOperation(recipeConfig[i].op);
+            for (let i = 0; i < recipeConfig.length; i++) {
+                const item = this.manager.recipe.addOperation(recipeConfig[i].op);
 
-            // Populate arguments
-            log.debug(`Populating arguments for ${recipeConfig[i].op}`);
-            const args = item.querySelectorAll(".arg");
-            for (let j = 0; j < args.length; j++) {
-                if (recipeConfig[i].args[j] === undefined) continue;
-                if (args[j].getAttribute("type") === "checkbox") {
-                    // checkbox
-                    args[j].checked = recipeConfig[i].args[j];
-                } else if (args[j].classList.contains("toggle-string")) {
-                    // toggleString
-                    args[j].value = recipeConfig[i].args[j].string;
-                    args[j].parentNode.parentNode.querySelector("button").innerHTML =
-                        Utils.escapeHtml(recipeConfig[i].args[j].option);
-                } else {
-                    // all others
-                    args[j].value = recipeConfig[i].args[j];
+                // Populate arguments
+                log.debug(`Populating arguments for ${recipeConfig[i].op}`);
+                const args = item.querySelectorAll(".arg"),
+                    recipeArgs = recipeConfig[i].args === undefined ? [] : recipeConfig[i].args;
+                for (let j = 0; j < args.length; j++) {
+                    if (recipeArgs[j] === undefined) continue;
+                    if (args[j].getAttribute("type") === "checkbox") {
+                        // checkbox
+                        args[j].checked = recipeArgs[j];
+                    } else if (args[j].classList.contains("toggle-string")) {
+                        // toggleString
+                        args[j].value = recipeArgs[j].string;
+                        args[j].parentNode.parentNode.querySelector("button").innerHTML =
+                            Utils.escapeHtml(recipeArgs[j].option);
+                    } else {
+                        // all others
+                        args[j].value = recipeArgs[j];
+                    }
                 }
-            }
 
-            // Set disabled and breakpoint
-            if (recipeConfig[i].disabled) {
-                item.querySelector(".disable-icon").click();
-            }
-            if (recipeConfig[i].breakpoint) {
-                item.querySelector(".breakpoint").click();
-            }
+                // Set disabled and breakpoint
+                if (recipeConfig[i].disabled) {
+                    item.querySelector(".disable-icon").click();
+                }
+                if (recipeConfig[i].breakpoint) {
+                    item.querySelector(".breakpoint").click();
+                }
 
-            this.manager.recipe.triggerArgEvents(item);
+                this.manager.recipe.triggerArgEvents(item);
 
-            this.progress = 0;
+                this.progress = 0;
+            }
+        });
+        if (source === RECIPE_TRANSACTION_SOURCE.URL) {
+            this.manager.recipe.commitSystemDOMChange(source);
+        } else {
+            this.manager.recipe.commitUserDOMChange(source);
         }
     }
 
@@ -775,8 +800,7 @@ class App {
 
 
     /**
-     * Handler for CyerChef statechange events.
-     * Fires whenever the input or recipe changes in any way.
+     * Handles general CyberChef state changes outside Recipe transactions.
      *
      * @listens Manager#statechange
      * @param {event} e
@@ -786,11 +810,100 @@ class App {
         // here and the debounced autoBake firing can record it via bakeStateId.
         this.stateChangeId++;
 
-        debounce(function() {
+        const inputNum = Number.isSafeInteger(e?.detail?.inputNum) ? e.detail.inputNum : null;
+        debounce(function(inputNum) {
             this.progress = 0;
+            this.autoBake(inputNum);
+            this.updateURL(true, null, true);
+        }, 20, "stateChange", this, [inputNum])();
+    }
+
+
+    /**
+     * Publishes the visible effects of one committed Agent Recipe transaction.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     * @param {Object|null} [autoBakeTarget=null] - Authorized immutable Agent execution target.
+     * @param {Function|null} [applicationWorkFactory=null] - Session-bound Run lifetime factory.
+     */
+    agentRecipeTransactionCommitted(
+        change,
+        autoBakeTarget=null,
+        applicationWorkFactory=null
+    ) {
+        cancelDebounce("stateChange");
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        this.updateURL(true, null, true);
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+        if (!autoBakeTarget || typeof applicationWorkFactory !== "function") return;
+
+        const applicationWork = applicationWorkFactory();
+        try {
+            const request = this.manager.worker.bakeAgentTarget(
+                autoBakeTarget,
+                applicationWork.signal
+            );
+            if (request?.completion) {
+                request.completion.then(applicationWork.close, applicationWork.close);
+            } else {
+                applicationWork.close();
+            }
+        } catch (err) {
+            applicationWork.close();
+            throw err;
+        }
+    }
+
+
+    /**
+     * Publishes a user Revert without scheduling Auto Bake.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    revertRecipeTransactionCommitted(change) {
+        cancelDebounce("stateChange");
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        this.updateURL(true, null, true);
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+    }
+
+
+    /**
+     * Publishes the visible effects of one committed user Recipe transaction.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    userRecipeTransactionCommitted(change) {
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
+
+        debounce(function() {
             this.autoBake();
             this.updateURL(true, null, true);
         }, 20, "stateChange", this, [])();
+    }
+
+
+    /**
+     * Publishes one system Recipe transaction without scheduling an additional Bake.
+     *
+     * @param {Object} change - Trusted structured Recipe change.
+     */
+    systemRecipeTransactionCommitted(change) {
+        this.progress = 0;
+        this.stateChangeId++;
+        this.manager.recipe.updateBreakpointIndicator(false);
+        this.manager.output.markRecipeStale();
+        window.dispatchEvent(new CustomEvent("recipechange", {detail: change}));
     }
 
 

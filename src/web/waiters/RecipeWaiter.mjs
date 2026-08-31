@@ -9,6 +9,18 @@ import Sortable from "sortablejs";
 import Utils from "../../core/Utils.mjs";
 import {escapeControlChars} from "../utils/editorUtils.mjs";
 import DOMPurify from "dompurify";
+import RecipeDOMProjection from "../recipe/RecipeDOMProjection.mjs";
+import {RecipeModel} from "../recipe/RecipeModel.mjs";
+import {
+    RECIPE_TRANSACTION_ERROR_CODE,
+    RECIPE_TRANSACTION_SOURCE,
+    RECIPE_TRANSACTION_STATUS,
+    RecipeTransaction,
+    RecipeTransactionError,
+} from "../recipe/RecipeTransaction.mjs";
+import {
+    RUN_TARGET_SOURCE,
+} from "../run/RunTargetBuilder.mjs";
 
 
 /**
@@ -21,11 +33,26 @@ class RecipeWaiter {
      *
      * @param {App} app - The main view object for CyberChef.
      * @param {Manager} manager - The CyberChef event manager.
+     * @param {Object} agentPatchPolicy - Synchronous Agent patch policy.
+     * @param {boolean} agentAutoBakeEnabled - Whether the active build profile supports Agent runs.
      */
-    constructor(app, manager) {
+    constructor(app, manager, agentPatchPolicy, agentAutoBakeEnabled) {
+        if (!agentPatchPolicy || typeof agentPatchPolicy.prepareChanges !== "function" ||
+            typeof agentPatchPolicy.authorizePatch !== "function") {
+            throw new TypeError("RecipeWaiter requires an Agent patch policy");
+        }
+        if (typeof agentAutoBakeEnabled !== "boolean") {
+            throw new TypeError("RecipeWaiter requires an Agent execution profile");
+        }
         this.app = app;
         this.manager = manager;
+        this.agentPatchPolicy = agentPatchPolicy;
+        this.agentAutoBakeEnabled = agentAutoBakeEnabled;
         this.removeIntent = false;
+        this.model = new RecipeModel();
+        this.modelSyncDepth = 0;
+        this.domProjection = new RecipeDOMProjection(this.app, this.manager);
+        this.transaction = new RecipeTransaction(this.model, this.domProjection);
     }
 
 
@@ -50,11 +77,8 @@ class RecipeWaiter {
                 if (this.removeIntent) {
                     evt.item.remove();
                     evt.target.dispatchEvent(this.manager.operationremove);
-                }
-            }.bind(this),
-            onSort: function(evt) {
-                if (evt.from.id === "rec-list") {
-                    document.dispatchEvent(this.manager.statechange);
+                } else if (evt.from.id === "rec-list" && evt.oldIndex !== evt.newIndex) {
+                    this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.SORT);
                 }
             }.bind(this)
         });
@@ -209,18 +233,17 @@ class RecipeWaiter {
     /**
      * Handler for ingredient change events.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      */
     ingChange(e) {
         if (e && e?.target?.classList?.contains("no-state-change")) return;
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.INGREDIENT);
     }
 
     /**
      * Handler for hide-args click events.
      * Updates the icon status.
      *
-     * @fires Manager#statechange
      * @param {event} e
      */
     hideArgsClick(e) {
@@ -253,14 +276,13 @@ class RecipeWaiter {
             }
         }
 
-        window.dispatchEvent(this.manager.statechange);
     }
 
     /**
      * Handler for disable click events.
      * Updates the icon status.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     disableClick(e) {
@@ -277,7 +299,7 @@ class RecipeWaiter {
         }
 
         this.app.progress = 0;
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.DISABLE);
     }
 
 
@@ -285,7 +307,7 @@ class RecipeWaiter {
      * Handler for breakpoint click events.
      * Updates the icon status.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     breakpointClick(e) {
@@ -299,7 +321,7 @@ class RecipeWaiter {
             bp.classList.remove("breakpoint-selected");
         }
 
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.BREAKPOINT);
     }
 
 
@@ -307,7 +329,7 @@ class RecipeWaiter {
      * Handler for operation doubleclick events.
      * Removes the operation from the recipe and auto bakes.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     operationDblclick(e) {
@@ -320,7 +342,7 @@ class RecipeWaiter {
      * Handler for operation child doubleclick events.
      * Removes the operation from the recipe.
      *
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     operationChildDblclick(e) {
@@ -330,12 +352,12 @@ class RecipeWaiter {
 
 
     /**
-     * Generates a configuration object to represent the current recipe.
+     * Reads the visible Recipe as runtime identities and compatible Operation configurations.
      *
-     * @returns {recipeConfig}
+     * @returns {Object[]} Ordered DOM projection.
      */
-    getConfig() {
-        const config = [];
+    getDOMProjection() {
+        const projectedSteps = [];
         let ingredients, ingList, disabled, bp, item;
         const operations = document.querySelectorAll("#rec-list li.operation");
 
@@ -377,10 +399,226 @@ class RecipeWaiter {
                 item.breakpoint = true;
             }
 
-            config.push(item);
+            const stepId = operations[i].dataset.recipeStepId;
+            if (!stepId) throw new Error("Recipe DOM Operation is missing runtime identity");
+            projectedSteps.push({stepId, operation: item});
         }
 
-        return config;
+        return projectedSteps;
+    }
+
+
+    /**
+     * Commits a user-visible DOM mutation through the shared Recipe transaction.
+     *
+     * @param {string} source - Trusted user mutation source.
+     * @returns {Object|null} Transaction result, or null while a DOM batch is active.
+     */
+    commitUserDOMChange(source) {
+        return this.commitTrustedDOMChange(source, false);
+    }
+
+
+    /**
+     * Commits a system-loaded DOM mutation through the shared Recipe transaction.
+     *
+     * @param {string} source - Trusted system mutation source.
+     * @returns {Object|null} Transaction result, or null while a DOM batch is active.
+     */
+    commitSystemDOMChange(source) {
+        return this.commitTrustedDOMChange(source, true);
+    }
+
+
+    /**
+     * Commits a trusted visible DOM projection and restores model state on failure.
+     *
+     * @param {string} source - Trusted mutation source.
+     * @param {boolean} system - Whether the mutation belongs to system initialization.
+     * @returns {Object|null} Transaction result, or null while a DOM batch is active.
+     */
+    commitTrustedDOMChange(source, system) {
+        if (this.modelSyncDepth > 0) return null;
+
+        let result;
+        try {
+            const projectedSteps = this.getDOMProjection();
+            result = system ?
+                this.transaction.commitSystemProjection(projectedSteps, source) :
+                this.transaction.commitUserProjection(projectedSteps, source);
+        } catch (err) {
+            this.#restoreDOMFromModel();
+            throw err;
+        }
+
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            if (system) this.app.systemRecipeTransactionCommitted(result.change);
+            else this.app.userRecipeTransactionCommitted(result.change);
+            this.adjustWidth();
+        }
+        return result;
+    }
+
+
+    /**
+     * Restores the visible Recipe after a trusted DOM mutation fails.
+     */
+    #restoreDOMFromModel() {
+        try {
+            this.domProjection.prepare(this.model.getSnapshot().steps).publish();
+        } catch (err) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.ROLLBACK_FAILED);
+        }
+    }
+
+
+    /**
+     * Groups synchronous DOM changes into one Recipe model synchronization.
+     *
+     * @param {Function} callback - Synchronous DOM mutation callback.
+     * @returns {*} Callback return value.
+     */
+    batchDOMChanges(callback) {
+        if (typeof callback !== "function") throw new TypeError("Recipe DOM batch requires a callback");
+
+        this.modelSyncDepth++;
+        try {
+            return callback();
+        } catch (err) {
+            if (this.modelSyncDepth === 1) this.#restoreDOMFromModel();
+            throw err;
+        } finally {
+            this.modelSyncDepth--;
+        }
+    }
+
+
+    /**
+     * Exports the current Recipe using CyberChef's existing configuration format.
+     *
+     * @returns {Object[]} Recipe configuration without runtime identity.
+     */
+    getConfig() {
+        return this.model.exportConfig();
+    }
+
+
+    /**
+     * Returns the current Recipe structure without argument values.
+     *
+     * @returns {Object} Redacted Recipe projection.
+     */
+    getReadProjection() {
+        return this.model.getReadProjection();
+    }
+
+
+    /**
+     * Returns the current semantic Recipe revision.
+     *
+     * @returns {number} Recipe revision.
+     */
+    getRecipeRevision() {
+        return this.model.getSnapshot().recipeRevision;
+    }
+
+
+    /**
+     * Captures the user-controlled state required for an Agent-triggered Auto Bake.
+     *
+     * @returns {Object|null} Exact active Input, Output, and view state or null.
+     */
+    captureAgentAutoBakeContext() {
+        if (!this.agentAutoBakeEnabled || !this.app.autoBake_) return null;
+
+        const viewState = this.manager.tabs.getViewState();
+        if (!viewState.tabsSynchronized) return null;
+
+        const inputState = this.manager.input.getSynchronizedInputState(viewState.activeInputTabId),
+            outputState = this.manager.output.getOutputState(viewState.activeOutputTabId);
+        if (!inputState || !Number.isSafeInteger(inputState.inputByteLength) || !outputState) {
+            return null;
+        }
+        return Object.freeze({inputState, outputState, viewState});
+    }
+
+
+    /**
+     * Applies an authorized Agent patch to the visible Recipe.
+     *
+     * @param {Object} input - Detached Agent patch request.
+     * @param {Function|null} [applicationWorkFactory=null] - Session-bound Run lifetime factory.
+     * @returns {Object} Bounded transaction result.
+     */
+    applyAgentPatch(input, applicationWorkFactory=null) {
+        if (this.app.baking) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
+        }
+
+        const autoBakeContext = this.captureAgentAutoBakeContext();
+        let autoBakeTarget = null;
+        const transactionPolicy = {
+                prepareChanges: changes => this.agentPatchPolicy.prepareChanges(changes),
+                authorizePatch: patch => {
+                    const postflight = this.agentPatchPolicy.authorizePatch(
+                        patch,
+                        autoBakeContext?.inputState.inputByteLength ?? null
+                    );
+                    if (!autoBakeContext || postflight.agentBakeAllowed !== true) return;
+
+                    autoBakeTarget = this.manager.runTargets.requireActiveTarget(
+                        this.manager.runTargets.capture({
+                            source: RUN_TARGET_SOURCE.AGENT,
+                            recipeRevisionAtStart: input.expectedRevision + 1,
+                            inputStates: [autoBakeContext.inputState],
+                            outputStates: [autoBakeContext.outputState],
+                            ...autoBakeContext.viewState,
+                            executionOptions: this.app.options,
+                            progress: 0,
+                            step: false,
+                        })
+                    );
+                },
+            },
+            result = this.transaction.applyAgentPatch(input, transactionPolicy);
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.app.agentRecipeTransactionCommitted(
+                result.change,
+                autoBakeTarget,
+                applicationWorkFactory
+            );
+            this.adjustWidth();
+        }
+        return result;
+    }
+
+
+    /**
+     * Returns whether the most recent Agent Recipe change can be restored.
+     *
+     * @returns {Object} Bounded Revert availability.
+     */
+    getAgentRevertState() {
+        return this.transaction.getAgentRevertState();
+    }
+
+
+    /**
+     * Restores the Recipe before the most recent Agent patch.
+     *
+     * @returns {Object} Bounded transaction result.
+     */
+    revertAgentPatch() {
+        if (this.app.baking) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
+        }
+
+        const result = this.transaction.revertAgentPatch();
+        if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
+            this.app.revertRecipeTransactionCommitted(result.change);
+            this.adjustWidth();
+        }
+        return result;
     }
 
 
@@ -411,6 +649,7 @@ class RecipeWaiter {
     buildRecipeOperation(el) {
         const opName = el.textContent;
         const op = new HTMLOperation(opName, this.app.operations[opName], this.app, this.manager);
+        if (!el.dataset.recipeStepId) el.dataset.recipeStepId = this.model.allocateStepId();
         el.innerHTML = op.toFullHtml();
 
         if (this.app.operations[opName].flowControl) {
@@ -452,14 +691,15 @@ class RecipeWaiter {
     /**
      * Removes all operations from the recipe.
      *
-     * @fires Manager#operationremove
+     * @fires Window#recipechange
+     * @param {string} [source=RECIPE_TRANSACTION_SOURCE.CLEAR] - Trusted user mutation source.
      */
-    clearRecipe() {
+    clearRecipe(source=RECIPE_TRANSACTION_SOURCE.CLEAR) {
         const recList = document.getElementById("rec-list");
         while (recList.firstChild) {
             recList.removeChild(recList.firstChild);
         }
-        recList.dispatchEvent(this.manager.operationremove);
+        this.commitUserDOMChange(source);
     }
 
 
@@ -510,14 +750,16 @@ class RecipeWaiter {
      * Handler for operationadd events.
      *
      * @listens Manager#operationadd
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     opAdd(e) {
         log.debug(`'${e.target.querySelector(".op-title").textContent}' added to recipe`);
 
-        this.triggerArgEvents(e.target);
-        window.dispatchEvent(this.manager.statechange);
+        this.batchDOMChanges(() => {
+            this.triggerArgEvents(e.target);
+        });
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.INSERT);
     }
 
 
@@ -525,12 +767,12 @@ class RecipeWaiter {
      * Handler for operationremove events.
      *
      * @listens Manager#operationremove
-     * @fires Manager#statechange
+     * @fires Window#recipechange
      * @param {event} e
      */
     opRemove(e) {
         log.debug("Operation removed from recipe");
-        window.dispatchEvent(this.manager.statechange);
+        this.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.REMOVE);
     }
 
 
@@ -585,6 +827,7 @@ class RecipeWaiter {
 
         if (text) {
             targ.value = text;
+            this.ingChange();
             return;
         }
 
@@ -596,7 +839,7 @@ class RecipeWaiter {
                 // Trigger floating label move
                 const changeEvent = new Event("change");
                 targ.dispatchEvent(changeEvent);
-                window.dispatchEvent(self.manager.statechange);
+                self.commitUserDOMChange(RECIPE_TRANSACTION_SOURCE.INGREDIENT);
             };
             reader.readAsText(file);
         }

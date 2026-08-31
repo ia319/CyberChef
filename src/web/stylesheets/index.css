@@ -28,6 +28,7 @@
 
 /* Layout */
 @import "./layout/_banner.css";
+@import "./layout/_collaboration.css";
 @import "./layout/_controls.css";
 @import "./layout/_io.css";
 @import "./layout/_modals.css";

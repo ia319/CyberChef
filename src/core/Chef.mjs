@@ -6,6 +6,7 @@
 
 import Dish from "./Dish.mjs";
 import Recipe from "./Recipe.mjs";
+import {RECIPE_EXECUTION_STATE} from "./ExecutionState.mjs";
 import log from "loglevel";
 import { isWorkerEnvironment } from "./Utils.mjs";
 
@@ -36,6 +37,7 @@ class Chef {
      * @returns {number} response.progress - The position that we have got to in the recipe
      * @returns {number} response.duration - The number of ms it took to execute the recipe
      * @returns {number} response.error - The error object thrown by a failed operation (false if no error)
+     * @returns {Object} response.execution - Final execution classification and presenter
     */
     async bake(input, recipeConfig, options={}) {
         log.debug("Chef baking");
@@ -84,7 +86,12 @@ class Chef {
             type: Dish.enumLookup(this.dish.type),
             progress: progress,
             duration: Date.now() - startTime,
-            error: error
+            error: error,
+            execution: {
+                state: recipe.getExecutionState() ?? RECIPE_EXECUTION_STATE.FATAL_FAILURE,
+                progress: progress,
+                presenter: recipe.getPresenter(),
+            },
         };
     }
 
@@ -104,17 +111,17 @@ class Chef {
      * the recipe, ingredients and dish.
      *
      * @param {Object[]} recipeConfig - The recipe configuration object
-     * @returns {number} The time it took to run the silent bake in milliseconds.
+     * @returns {Promise<number>} The time it took to run the silent bake in milliseconds.
     */
-    silentBake(recipeConfig) {
+    async silentBake(recipeConfig) {
         log.debug("Running silent bake");
 
-        const startTime = Date.now(),
-            recipe = new Recipe(recipeConfig),
-            dish = new Dish();
+        const startTime = Date.now();
 
         try {
-            recipe.execute(dish);
+            const recipe = new Recipe(recipeConfig),
+                dish = new Dish();
+            await recipe.execute(dish);
         } catch (err) {
             // Suppress all errors
         }

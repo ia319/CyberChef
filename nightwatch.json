@@ -9,7 +9,6 @@
       "launch_url": "http://localhost:8080",
       "webdriver": {
         "start_process": true,
-        "server_path": "./node_modules/.bin/chromedriver",
         "port": 9515,
         "log_path": "tests/browser/output"
       },
@@ -25,8 +24,17 @@
 
     "prod": {
       "launch_url": "http://localhost:8000/index.html"
+    },
+
+    "webmcp": {
+      "launch_url": "http://localhost:8000/index.html",
+      "desiredCapabilities": {
+        "browserName": "chrome",
+        "goog:chromeOptions": {
+          "args": ["--enable-features=WebMCPTesting"]
+        }
+      }
     }
 
   }
 }
-

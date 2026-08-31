@@ -1,17 +1,21 @@
 {
     "version": "0.2",
     "language": "en,en-gb",
-    "words": [],
+    "words": [
+        "apploaded",
+        "cyberchef",
+        "recipechange",
+        "WebMCP"
+    ],
     "dictionaries": [
-      "npm",
-      "softwareTerms",
-      "node",
-      "html",
-      "css",
-      "bash",
-      "en-gb",
-      "misc"
+        "npm",
+        "softwareTerms",
+        "node",
+        "html",
+        "css",
+        "bash",
+        "en-gb",
+        "misc"
     ],
     "ignorePaths": ["package.json", "package-lock.json", "node_modules"]
-  }
-  
+}

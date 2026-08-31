@@ -10,6 +10,7 @@ import Operation from "./Operation.mjs";
 import DishError from "./errors/DishError.mjs";
 import log from "loglevel";
 import { isWorkerEnvironment } from "./Utils.mjs";
+import {RECIPE_EXECUTION_STATE} from "./ExecutionState.mjs";
 
 // Cache container for modules
 let modules = null;
@@ -26,6 +27,7 @@ class Recipe  {
      */
     constructor(recipeConfig) {
         this.opList = [];
+        this.executionState = null;
 
         if (recipeConfig) {
             this._parseConfig(recipeConfig);
@@ -185,7 +187,10 @@ class Recipe  {
             numJumps = 0,
             numRegisters = forkState.numRegisters || 0;
 
-        if (startFrom === 0) this.lastRunOp = null;
+        if (startFrom === 0) {
+            this.lastRunOp = null;
+            this.executionState = null;
+        }
 
         await this._hydrateOpList();
 
@@ -200,6 +205,7 @@ class Recipe  {
             }
             if (op.breakpoint) {
                 log.debug("Pausing at breakpoint");
+                this.executionState = RECIPE_EXECUTION_STATE.PAUSED;
                 return i;
             }
 
@@ -242,10 +248,12 @@ class Recipe  {
                     // native types is not fully supported yet.
                     dish.set(err.message, "string");
                     this.lastRunOp = null;
+                    this.executionState = RECIPE_EXECUTION_STATE.EXPECTED_FAILURE;
                     return i;
                 } else if (err instanceof DishError || err?.type === "DishError") {
                     dish.set(err.message, "string");
                     this.lastRunOp = null;
+                    this.executionState = RECIPE_EXECUTION_STATE.EXPECTED_FAILURE;
                     return i;
                 } else {
                     const e = typeof err == "string" ? { message: err } : err;
@@ -258,13 +266,35 @@ class Recipe  {
                         e.displayStr = `${op.name} - ${e.displayStr || e.message}`;
                     }
 
+                    this.executionState = RECIPE_EXECUTION_STATE.FATAL_FAILURE;
                     throw e;
                 }
             }
         }
 
         log.debug("Recipe complete");
+        this.executionState = RECIPE_EXECUTION_STATE.COMPLETED;
         return this.opList.length;
+    }
+
+
+    /**
+     * Returns the final classification from the most recent execution.
+     *
+     * @returns {string|null} Execution state or null before execution settles.
+     */
+    getExecutionState() {
+        return this.executionState;
+    }
+
+
+    /**
+     * Returns the Operation responsible for presenting the current Dish.
+     *
+     * @returns {string|null} Presenter Operation name or null.
+     */
+    getPresenter() {
+        return this.lastRunOp?.name ?? null;
     }
 
 
@@ -352,4 +382,7 @@ class Recipe  {
 
 }
 
+export {
+    RECIPE_EXECUTION_STATE,
+};
 export default Recipe;
