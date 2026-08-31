@@ -47,13 +47,14 @@ module.exports = {
             browser.assert.strictEqual(value.getToolsAvailable, true);
             browser.assert.strictEqual(value.executeToolAvailable, true);
             browser.assert.strictEqual(value.panelHidden, false);
-            browser.assert.strictEqual(value.profileName, "run");
+            browser.assert.strictEqual(value.profileName, "analysis");
             browser.assert.deepStrictEqual(value.toolNames, [
                 "search_operations",
                 "get_operation_details",
                 "get_recipe_state",
                 "apply_recipe_patch",
                 "bake_recipe",
+                "inspect_output",
             ]);
             initialSessionState = value;
         });
@@ -62,7 +63,10 @@ module.exports = {
         browser.expect.element("#webmcp-heading").text.to.equal("WebMCP Recipe access");
         browser.expect.element("#webmcp-tool-list").text.to.contain("apply_recipe_patch");
         browser.expect.element("#webmcp-tool-list").text.to.contain("bake_recipe");
-        browser.expect.element("#webmcp-profile-summary").text.to.contain("request a run");
+        browser.expect.element("#webmcp-tool-list").text.to.contain("inspect_output");
+        browser.expect.element("#webmcp-profile-summary").text.to.contain(
+            "bounded Output-derived analysis"
+        );
         browser.expect.element("#webmcp-start").attribute("aria-label")
             .to.equal("Start WebMCP Recipe access");
         browser.expect.element("#webmcp-revert").attribute("aria-describedby")
@@ -128,6 +132,7 @@ module.exports = {
                 "bake_recipe",
                 "get_operation_details",
                 "get_recipe_state",
+                "inspect_output",
                 "search_operations",
             ]);
             browser.assert.strictEqual(value.search.ok, true);
@@ -165,6 +170,7 @@ module.exports = {
                     stateTool = tools.find(tool => tool.name === "get_recipe_state"),
                     patchTool = tools.find(tool => tool.name === "apply_recipe_patch"),
                     bakeTool = tools.find(tool => tool.name === "bake_recipe"),
+                    inspectTool = tools.find(tool => tool.name === "inspect_output"),
                     state = await window.__invokeWebMCPTool(stateTool, {}),
                     bakeIdBefore = manager.worker.bakeId,
                     patch = await window.__invokeWebMCPTool(patchTool, {
@@ -175,12 +181,16 @@ module.exports = {
                     bake = await window.__invokeWebMCPTool(bakeTool, {
                         expectedRevision: patch.state.recipeRevision,
                     }),
+                    inspection = await window.__invokeWebMCPTool(inspectTool, {
+                        bakeId: bake.state.bakeId,
+                    }),
                     outputNum = manager.tabs.getActiveTab("output");
 
                 done({
                     state,
                     patch,
                     bake,
+                    inspection,
                     bakeIdBefore,
                     bakeIdAfterPatch,
                     bakeIdAfterTool: manager.worker.bakeId,
@@ -190,6 +200,8 @@ module.exports = {
                     panelText: document.getElementById("webmcp-collaboration").textContent,
                     bakeContainsInput: JSON.stringify(bake).includes(inputCanary),
                     bakeContainsOutput: JSON.stringify(bake).includes(outputCanary),
+                    inspectionContainsInput: JSON.stringify(inspection).includes(inputCanary),
+                    inspectionContainsOutput: JSON.stringify(inspection).includes(outputCanary),
                 });
             } catch (err) {
                 done({scriptError: {name: err.name, message: err.message}});
@@ -217,6 +229,17 @@ module.exports = {
             browser.assert.strictEqual(value.outputText, "U0VDUkVUX0lOUFVUX0NBTkFSWQ==");
             browser.assert.strictEqual(value.bakeContainsInput, false);
             browser.assert.strictEqual(value.bakeContainsOutput, false);
+            browser.assert.strictEqual(value.inspection.ok, true);
+            browser.assert.strictEqual(
+                value.inspection.data.analysisState,
+                "signalsReady"
+            );
+            browser.assert.strictEqual(
+                value.inspection.data.bakeId,
+                value.bake.state.bakeId
+            );
+            browser.assert.strictEqual(value.inspectionContainsInput, false);
+            browser.assert.strictEqual(value.inspectionContainsOutput, false);
             browser.assert.strictEqual(value.config.length, 1);
             browser.assert.strictEqual(JSON.stringify(value.patch).includes("A-Za-z0-9+/="), false);
             browser.assert.strictEqual(value.panelText.includes("A-Za-z0-9+/="), false);
@@ -305,6 +328,85 @@ module.exports = {
             browser.assert.strictEqual(value.config[0].op, "From Hex");
             browser.assert.strictEqual(value.config[0].disabled, true);
         });
+    },
+
+    "Output inspection follows the current completed Bake": browser => {
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager;
+            try {
+                manager.controls.setAutoBake(false);
+                app.setRecipeConfig([]);
+                const inputView = manager.input.inputEditorView,
+                    setInput = value => inputView.dispatch({
+                        changes: {
+                            from: 0,
+                            to: inputView.state.doc.length,
+                            insert: value,
+                        },
+                    }),
+                    tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    bakeTool = tools.find(tool => tool.name === "bake_recipe"),
+                    inspectTool = tools.find(tool => tool.name === "inspect_output");
+
+                setInput("48656c6c6f");
+                const firstState = await window.__invokeWebMCPTool(stateTool, {}),
+                    firstBake = await window.__invokeWebMCPTool(bakeTool, {
+                        expectedRevision: firstState.state.recipeRevision,
+                    }),
+                    firstInspection = await window.__invokeWebMCPTool(inspectTool, {
+                        bakeId: firstBake.state.bakeId,
+                    });
+
+                setInput("576f726c64");
+                const secondBake = await window.__invokeWebMCPTool(bakeTool, {
+                        expectedRevision: firstState.state.recipeRevision,
+                    }),
+                    staleInspection = await window.__invokeWebMCPTool(inspectTool, {
+                        bakeId: firstBake.state.bakeId,
+                    }),
+                    secondInspection = await window.__invokeWebMCPTool(inspectTool, {
+                        bakeId: secondBake.state.bakeId,
+                    });
+
+                done({
+                    firstBake,
+                    firstInspection,
+                    secondBake,
+                    staleInspection,
+                    secondInspection,
+                    containsFirstInput: JSON.stringify(firstInspection).includes("48656c6c6f"),
+                    containsSecondInput: JSON.stringify(secondInspection).includes("576f726c64"),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                manager.controls.setAutoBake(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.firstBake.ok, true);
+            browser.assert.strictEqual(value.firstInspection.ok, true);
+            browser.assert.strictEqual(value.secondBake.ok, true);
+            browser.assert.strictEqual(
+                value.secondBake.state.bakeId !== value.firstBake.state.bakeId,
+                true
+            );
+            browser.assert.strictEqual(
+                value.staleInspection.error.code,
+                "STALE_OUTPUT_ANALYSIS"
+            );
+            browser.assert.strictEqual(value.secondInspection.ok, true);
+            browser.assert.strictEqual(
+                value.secondInspection.data.bakeId,
+                value.secondBake.state.bakeId
+            );
+            browser.assert.strictEqual(value.containsFirstInput, false);
+            browser.assert.strictEqual(value.containsSecondInput, false);
+        });
+        browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
     },
 
     "Stop cancels an exclusive Agent Run": browser => {

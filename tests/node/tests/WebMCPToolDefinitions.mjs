@@ -161,9 +161,9 @@ TestRegister.addApiTests([
         assertDeeplyFrozen(BUILD_PROFILES);
     }),
 
-    it("WebMCPToolDefinitions: should expose the candidate Run capability", () => {
-        assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.RUN);
-        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, FORMAL_TOOL_NAMES.slice(0, 5));
+    it("WebMCPToolDefinitions: should expose the candidate Analysis capability", () => {
+        assert.equal(ACTIVE_BUILD_PROFILE.name, PROFILE_NAME.ANALYSIS);
+        assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.toolNames, FORMAL_TOOL_NAMES);
         assert.deepStrictEqual(ACTIVE_BUILD_PROFILE.stateFields, [
             "sessionEpoch",
             "recipeRevision",
@@ -178,6 +178,7 @@ TestRegister.addApiTests([
             "outputVersion",
             "bakeId",
             "terminalState",
+            "analysisId",
         ]);
     }),
 

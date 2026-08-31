@@ -26,6 +26,8 @@ import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
 import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
 import {createBakeRecipeToolHandlers} from "./webmcp/BakeRecipeToolHandlers.mjs";
 import {AgentBakeService} from "./webmcp/AgentBakeService.mjs";
+import {AgentAnalysisService} from "./webmcp/AgentAnalysisService.mjs";
+import {createInspectOutputToolHandlers} from "./webmcp/InspectOutputToolHandlers.mjs";
 import {TOOL_NAME} from "./webmcp/ToolDefinitions.mjs";
 import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
 import {RunCoordinator} from "./run/RunCoordinator.mjs";
@@ -101,6 +103,7 @@ class Manager {
         this.bindings    = new BindingsWaiter(this.app, this);
         this.background  = new BackgroundWorkerWaiter(this.app, this);
         this.agentBake   = new AgentBakeService(this.app, this);
+        this.agentAnalysis = new AgentAnalysisService(this);
         const runStateService = ACTIVE_BUILD_PROFILE.toolNames.includes(TOOL_NAME.BAKE_RECIPE) ?
             this.agentBake : null;
         this.webmcp      = new WebMCPWaiter(
@@ -112,6 +115,7 @@ class Manager {
                 ...OPERATION_TOOL_HANDLERS,
                 ...createRecipeToolHandlers(this.recipe, runStateService),
                 ...createBakeRecipeToolHandlers(this.agentBake),
+                ...createInspectOutputToolHandlers(this.agentAnalysis),
             }
         );
         this.collaboration = new CollaborationWaiter(
