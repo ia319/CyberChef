@@ -609,6 +609,10 @@ class RecipeWaiter {
      * @returns {Object} Bounded transaction result.
      */
     revertAgentPatch() {
+        if (this.app.baking) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
+        }
+
         const result = this.transaction.revertAgentPatch();
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
             this.app.revertRecipeTransactionCommitted(result.change);

@@ -208,7 +208,7 @@ module.exports = {
         });
     },
 
-    "Agent Recipe transaction publishes once without Auto Bake": browser => {
+    "Agent Recipe transaction skips normal Auto Bake": browser => {
         browser.execute(() => {
             const app = window.app,
                 recipe = app.manager.recipe;
@@ -236,11 +236,14 @@ module.exports = {
                 .length;
 
             window.__recipeChangeEvents = [];
-            window.addEventListener("recipechange", event => {
+            const recipeChangeHandler = event => {
                 window.__recipeChangeEvents.push(event.detail);
-            }, {once: true});
+            };
+            window.addEventListener("recipechange", recipeChangeHandler);
 
-            const bakeId = app.manager.worker.bakeId,
+            const bakeId = app.manager.worker.bakeId;
+            let result;
+            try {
                 result = recipe.applyAgentPatch({
                     expectedRevision: before.recipeRevision,
                     changes: [
@@ -262,6 +265,9 @@ module.exports = {
                         },
                     ],
                 });
+            } finally {
+                window.removeEventListener("recipechange", recipeChangeHandler);
+            }
 
             window.__agentRecipeTransaction = {
                 bakeId,
@@ -330,7 +336,42 @@ module.exports = {
         });
     },
 
-    "User Revert restores the latest Agent Recipe without Auto Bake": browser => {
+    "User Revert rejects an active Bake": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                recipe = app.manager.recipe,
+                before = recipe.getReadProjection(),
+                beforeConfig = recipe.getConfig(),
+                revertStateBefore = recipe.getAgentRevertState();
+            let errorCode = null;
+
+            app.baking = true;
+            try {
+                recipe.revertAgentPatch();
+            } catch (err) {
+                errorCode = err.code;
+            } finally {
+                app.baking = false;
+            }
+
+            return {
+                errorCode,
+                beforeRevision: before.recipeRevision,
+                afterRevision: recipe.getRecipeRevision(),
+                beforeConfig,
+                afterConfig: recipe.getConfig(),
+                revertStateBefore,
+                revertStateAfter: recipe.getAgentRevertState(),
+            };
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.errorCode, "BAKE_BUSY");
+            browser.assert.strictEqual(value.afterRevision, value.beforeRevision);
+            browser.assert.deepStrictEqual(value.afterConfig, value.beforeConfig);
+            browser.assert.deepStrictEqual(value.revertStateAfter, value.revertStateBefore);
+        });
+    },
+
+    "User Revert skips normal Auto Bake": browser => {
         browser.execute(() => {
             const app = window.app,
                 recipe = app.manager.recipe,
@@ -339,11 +380,17 @@ module.exports = {
                 bakeId = app.manager.worker.bakeId;
 
             window.__revertRecipeEvents = [];
-            window.addEventListener("recipechange", event => {
+            const recipeChangeHandler = event => {
                 window.__revertRecipeEvents.push(event.detail);
-            }, {once: true});
+            };
+            window.addEventListener("recipechange", recipeChangeHandler);
 
-            const result = recipe.revertAgentPatch();
+            let result;
+            try {
+                result = recipe.revertAgentPatch();
+            } finally {
+                window.removeEventListener("recipechange", recipeChangeHandler);
+            }
             let secondErrorCode = null;
             try {
                 recipe.revertAgentPatch();
