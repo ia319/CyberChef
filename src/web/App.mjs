@@ -611,20 +611,21 @@ class App {
 
                 // Populate arguments
                 log.debug(`Populating arguments for ${recipeConfig[i].op}`);
-                const args = item.querySelectorAll(".arg");
+                const args = item.querySelectorAll(".arg"),
+                    recipeArgs = recipeConfig[i].args === undefined ? [] : recipeConfig[i].args;
                 for (let j = 0; j < args.length; j++) {
-                    if (recipeConfig[i].args[j] === undefined) continue;
+                    if (recipeArgs[j] === undefined) continue;
                     if (args[j].getAttribute("type") === "checkbox") {
                         // checkbox
-                        args[j].checked = recipeConfig[i].args[j];
+                        args[j].checked = recipeArgs[j];
                     } else if (args[j].classList.contains("toggle-string")) {
                         // toggleString
-                        args[j].value = recipeConfig[i].args[j].string;
+                        args[j].value = recipeArgs[j].string;
                         args[j].parentNode.parentNode.querySelector("button").innerHTML =
-                            Utils.escapeHtml(recipeConfig[i].args[j].option);
+                            Utils.escapeHtml(recipeArgs[j].option);
                     } else {
                         // all others
-                        args[j].value = recipeConfig[i].args[j];
+                        args[j].value = recipeArgs[j];
                     }
                 }
 
