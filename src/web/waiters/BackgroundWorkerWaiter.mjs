@@ -6,6 +6,10 @@
 
 import ChefWorker from "worker-loader?inline=no-fallback!../../core/ChefWorker.js";
 import {
+    MAX_ANALYSIS_CANDIDATES,
+    MAX_ANALYSIS_SAMPLE_BYTES,
+} from "../analysis/AnalysisPolicy.mjs";
+import {
     ANALYSIS_DECISION,
     ANALYSIS_OWNER,
     ANALYSIS_STATE,
@@ -13,9 +17,6 @@ import {
     createAnalysisTarget,
 } from "../analysis/AnalysisCoordinator.mjs";
 
-
-const MAX_ANALYSIS_SAMPLE_BYTES = 1000;
-const MAX_ANALYSIS_CANDIDATES = 5;
 
 /**
  * Waiter to handle conversations with a ChefWorker in the background.

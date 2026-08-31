@@ -49,6 +49,7 @@ import {
     ANALYSIS_OWNER,
     ANALYSIS_STATE,
 } from "../analysis/AnalysisCoordinator.mjs";
+import {MAX_ANALYSIS_SAMPLE_BYTES} from "../analysis/AnalysisPolicy.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
 
 
@@ -735,6 +736,35 @@ class OutputWaiter {
             this.manager.tabs.getActiveTab("output") === outputTabId &&
             this.outputs[outputTabId]?.provenance === provenance &&
             this.outputIsFresh(outputTabId);
+    }
+
+    /**
+     * Captures a bounded sample only while one fresh visible Output stays current.
+     *
+     * @param {number|null} [bakeId=null] - Optional completed Run identity to require.
+     * @param {AbortSignal|null} [signal=null] - Optional analysis cancellation signal.
+     * @returns {Promise<Object|null>} Immutable provenance and sample, or null when stale.
+     */
+    async captureAnalysisInput(bakeId=null, signal=null) {
+        if (signal?.aborted) throw signal.reason;
+        const inputNum = this.manager.tabs.getActiveTab("output"),
+            provenance = this.outputs[inputNum]?.provenance,
+            dish = this.getOutputDish(inputNum);
+        if (dish === null || bakeId !== null && provenance?.bakeId !== bakeId ||
+            !this.isCurrentOutputProvenance(provenance)) return null;
+
+        const buffer = await this.getDishBuffer(dish);
+        if (signal?.aborted) throw signal.reason;
+        if (!(buffer instanceof ArrayBuffer)) {
+            throw new TypeError("Output analysis input is invalid");
+        }
+        if (bakeId !== null && provenance.bakeId !== bakeId ||
+            !this.isCurrentOutputProvenance(provenance)) return null;
+
+        return Object.freeze({
+            provenance,
+            sample: buffer.slice(0, MAX_ANALYSIS_SAMPLE_BYTES),
+        });
     }
 
     /**
@@ -1741,17 +1771,10 @@ class OutputWaiter {
      */
     async backgroundMagic() {
         this.hideMagicButton();
-        const inputNum = this.manager.tabs.getActiveTab("output"),
-            output = this.outputs[inputNum],
-            provenance = output?.provenance,
-            dish = this.getOutputDish(inputNum);
-        if (!this.app.options.autoMagic || dish === null ||
-            !this.isCurrentOutputProvenance(provenance)) return;
-        const buffer = await this.getDishBuffer(dish);
-        if (!this.isCurrentOutputProvenance(provenance)) return;
-        const sample = buffer.slice(0, 1000);
-
-        if (!sample.byteLength) return;
+        if (!this.app.options.autoMagic) return;
+        const analysisInput = await this.captureAnalysisInput();
+        if (!analysisInput || !analysisInput.sample.byteLength) return;
+        const {provenance, sample} = analysisInput;
 
         const request = this.manager.background.magic(
                 sample,

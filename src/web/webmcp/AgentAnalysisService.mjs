@@ -1,0 +1,158 @@
+import {
+    ANALYSIS_DECISION,
+    ANALYSIS_OWNER,
+    ANALYSIS_STATE,
+    analysisTargetMatches,
+} from "../analysis/AnalysisCoordinator.mjs";
+import {
+    AGENT_ANALYSIS_ERROR_CODE,
+    AgentAnalysisError,
+} from "./AgentAnalysisError.mjs";
+
+
+const COMPLETABLE_DECISIONS = new Set([
+    ANALYSIS_DECISION.CACHED,
+    ANALYSIS_DECISION.JOINED,
+    ANALYSIS_DECISION.STARTED,
+]);
+const TERMINAL_ERROR_CODES = Object.freeze({
+    [ANALYSIS_STATE.CANCELLED]: AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED,
+    [ANALYSIS_STATE.FAILED]: AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED,
+    [ANALYSIS_STATE.NO_SUGGESTION]: AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_EMPTY,
+    [ANALYSIS_STATE.STALE]: AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS,
+    [ANALYSIS_STATE.TIMED_OUT]: AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_TIMEOUT,
+});
+
+
+/**
+ * Coordinates one authorized Agent inspection with the shared Output analysis lifecycle.
+ */
+class AgentAnalysisService {
+    #manager;
+
+    /**
+     * @param {Object} manager - Output, Background Worker, and Analysis services.
+     */
+    constructor(manager) {
+        if (!manager?.output || !manager?.background || !manager?.analyses ||
+            typeof manager.output.captureAnalysisInput !== "function" ||
+            typeof manager.output.isCurrentOutputProvenance !== "function" ||
+            typeof manager.background.invalidateAnalysis !== "function" ||
+            typeof manager.background.magic !== "function" ||
+            typeof manager.analyses.getDecision !== "function") {
+            throw new TypeError("Agent analysis service requires complete Output analysis services");
+        }
+        this.#manager = manager;
+    }
+
+    /**
+     * Reuses, joins, or starts analysis for one exact fresh visible Output.
+     *
+     * @param {number} bakeId - Completed Run identity supplied by the Agent.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @returns {Promise<Object>} Decision, settled analysis, and trusted internal candidates.
+     * @throws {AgentAnalysisError} When the requested Output cannot produce an approved result.
+     */
+    async inspectCurrentOutput(bakeId, invocation) {
+        if (!Number.isSafeInteger(bakeId) || bakeId < 1 ||
+            !invocation || typeof invocation.checkpoint !== "function" ||
+            typeof invocation.consumeOutputAnalysis !== "function" ||
+            !(invocation.signal instanceof AbortSignal)) {
+            throw new AgentAnalysisError(
+                AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS
+            );
+        }
+        invocation.checkpoint();
+
+        let analysisInput;
+        try {
+            analysisInput = await this.#manager.output.captureAnalysisInput(
+                bakeId,
+                invocation.signal
+            );
+        } catch (err) {
+            if (invocation.signal.aborted) throw invocation.signal.reason;
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+        invocation.checkpoint();
+
+        const provenance = analysisInput?.provenance,
+            sample = analysisInput?.sample;
+        if (!provenance || provenance.bakeId !== bakeId) {
+            throw new AgentAnalysisError(
+                AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS
+            );
+        }
+        if (!(sample instanceof ArrayBuffer)) {
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+        if (sample.byteLength === 0) {
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_EMPTY);
+        }
+
+        this.#manager.background.invalidateAnalysis(provenance);
+        let expectedDecision;
+        try {
+            expectedDecision = this.#manager.analyses.getDecision(provenance).decision;
+        } catch {
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+        if (expectedDecision === ANALYSIS_DECISION.STARTED) {
+            invocation.consumeOutputAnalysis();
+        }
+
+        let request;
+        try {
+            request = this.#manager.background.magic(
+                sample,
+                provenance,
+                ANALYSIS_OWNER.AGENT,
+                invocation.signal
+            );
+        } catch (err) {
+            if (invocation.signal.aborted) throw invocation.signal.reason;
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+        if (!request || request.decision !== expectedDecision ||
+            !COMPLETABLE_DECISIONS.has(request.decision) ||
+            !(request.completion instanceof Promise)) {
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+
+        let completion;
+        try {
+            completion = await request.completion;
+        } catch (err) {
+            if (invocation.signal.aborted) throw invocation.signal.reason;
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+        invocation.checkpoint();
+
+        const analysis = completion?.analysis;
+        if (!analysis || !analysisTargetMatches(analysis.target, provenance) ||
+            !this.#manager.output.isCurrentOutputProvenance(provenance)) {
+            throw new AgentAnalysisError(
+                AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS
+            );
+        }
+        if (analysis.terminalState !== ANALYSIS_STATE.SIGNALS_READY) {
+            throw new AgentAnalysisError(
+                TERMINAL_ERROR_CODES[analysis.terminalState] ??
+                    AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED
+            );
+        }
+        if (!Array.isArray(completion.value) || completion.value.length < 1) {
+            throw new AgentAnalysisError(AGENT_ANALYSIS_ERROR_CODE.ANALYSIS_FAILED);
+        }
+
+        return Object.freeze({
+            decision: request.decision,
+            analysis,
+            candidates: completion.value,
+        });
+    }
+}
+
+export {
+    AgentAnalysisService,
+};

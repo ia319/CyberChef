@@ -52,6 +52,7 @@ import "./tests/WebMCPAgentRecipePatchPolicy.mjs";
 import "./tests/WebMCPRecipeToolHandlers.mjs";
 import "./tests/WebMCPBakeRecipeToolHandlers.mjs";
 import "./tests/WebMCPAgentBakeService.mjs";
+import "./tests/WebMCPAgentAnalysisService.mjs";
 import "./tests/WebMCPOutputAnalysisSerializer.mjs";
 import "./tests/WebMCPOperationCapabilityManifest.mjs";
 import "./tests/WebMCPOperationIngredients.mjs";
