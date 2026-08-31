@@ -1,6 +1,7 @@
 import assert from "assert";
 import CollaborationSession, {
     COLLABORATION_SESSION_STATE,
+    MAX_SESSION_OUTPUT_ANALYSES,
 } from "../../../src/web/webmcp/CollaborationSession.mjs";
 import { executeTool } from "../../../src/web/webmcp/ToolExecutor.mjs";
 import { TOOL_ERROR_CODE } from "../../../src/web/webmcp/ToolResult.mjs";
@@ -166,5 +167,53 @@ TestRegister.addApiTests([
         assert.equal(applicationWork.signal.aborted, true);
         applicationWork.close();
         applicationWork.close();
+    }),
+
+    it("WebMCPCollaborationSession: should bound newly started Output analyses per epoch", async () => {
+        const session = new CollaborationSession(true);
+        session.start();
+
+        for (let count = 0; count < MAX_SESSION_OUTPUT_ANALYSES; count++) {
+            const result = await session.execute(async (input, invocation) => {
+                invocation.consumeOutputAnalysis();
+                return {data: {status: "reserved"}};
+            }, {});
+            assert.equal(result.data.status, "reserved");
+        }
+
+        const exhausted = await executeTool(
+            CONTRACT,
+            session.execute.bind(session, async (input, invocation) => {
+                invocation.consumeOutputAnalysis();
+                return {data: {status: "unexpected"}};
+            }),
+            {}
+        );
+        assert.equal(exhausted.error.code, TOOL_ERROR_CODE.ANALYSIS_BUDGET_EXHAUSTED);
+        assert.deepStrictEqual(session.getState(), {
+            state: COLLABORATION_SESSION_STATE.ACTIVE,
+            sessionEpoch: 1,
+        });
+    }),
+
+    it("WebMCPCollaborationSession: should reset Output analysis accounting on restart", async () => {
+        const session = new CollaborationSession(true);
+        session.start();
+        for (let count = 0; count < MAX_SESSION_OUTPUT_ANALYSES; count++) {
+            await session.execute(async (input, invocation) => {
+                invocation.consumeOutputAnalysis();
+                return {};
+            }, {});
+        }
+
+        session.stop();
+        session.start();
+        const result = await session.execute(async (input, invocation) => {
+            invocation.consumeOutputAnalysis();
+            return {data: {status: "reserved"}};
+        }, {});
+
+        assert.equal(result.data.status, "reserved");
+        assert.equal(session.getState().sessionEpoch, 2);
     }),
 ]);

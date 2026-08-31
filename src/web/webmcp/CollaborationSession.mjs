@@ -6,6 +6,7 @@ const COLLABORATION_SESSION_STATE = Object.freeze({
     OFF: "off",
     ACTIVE: "active",
 });
+const MAX_SESSION_OUTPUT_ANALYSES = 8;
 
 
 /**
@@ -112,6 +113,20 @@ class CollaborationInvocation {
 
 
     /**
+     * Consumes one session slot before starting a new Agent-owned Output analysis.
+     *
+     * Joined and cached analysis requests must not call this method.
+     *
+     * @returns {void}
+     * @throws {ToolExecutionError} When the session ended or its analysis budget is exhausted.
+     */
+    consumeOutputAnalysis() {
+        this.checkpoint();
+        this.#session.consumeOutputAnalysis(this.#sessionEpoch);
+    }
+
+
+    /**
      * Rejects cancelled invocations and invocations from an ended session.
      */
     checkpoint() {
@@ -144,6 +159,7 @@ class CollaborationSession extends EventTarget {
     #nextSessionEpoch;
     #sessionController;
     #epochFactory;
+    #outputAnalysisCount;
 
     /**
      * Creates a collaboration session controller.
@@ -167,6 +183,7 @@ class CollaborationSession extends EventTarget {
         this.#nextSessionEpoch = 0;
         this.#sessionController = null;
         this.#epochFactory = epochFactory;
+        this.#outputAnalysisCount = 0;
     }
 
 
@@ -200,6 +217,7 @@ class CollaborationSession extends EventTarget {
 
         this.#sessionEpoch = sessionEpoch;
         this.#sessionController = new AbortController();
+        this.#outputAnalysisCount = 0;
         this.#state = COLLABORATION_SESSION_STATE.ACTIVE;
         this.dispatchEvent(new Event("change"));
 
@@ -219,6 +237,7 @@ class CollaborationSession extends EventTarget {
         this.#state = COLLABORATION_SESSION_STATE.OFF;
         this.#sessionEpoch = null;
         this.#sessionController = null;
+        this.#outputAnalysisCount = 0;
         controller.abort(new DOMException("Recipe collaboration session ended", "AbortError"));
         this.dispatchEvent(new Event("change"));
 
@@ -235,6 +254,24 @@ class CollaborationSession extends EventTarget {
     isCurrent(sessionEpoch) {
         return this.#state === COLLABORATION_SESSION_STATE.ACTIVE &&
             this.#sessionEpoch === sessionEpoch;
+    }
+
+
+    /**
+     * Atomically accounts for a newly started Output analysis in one active epoch.
+     *
+     * @param {number|string} sessionEpoch - Epoch captured by the protected invocation.
+     * @returns {void}
+     * @throws {ToolExecutionError} When the epoch ended or has no remaining analysis slots.
+     */
+    consumeOutputAnalysis(sessionEpoch) {
+        if (!this.isCurrent(sessionEpoch)) {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.SESSION_ENDED);
+        }
+        if (this.#outputAnalysisCount >= MAX_SESSION_OUTPUT_ANALYSES) {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.ANALYSIS_BUDGET_EXHAUSTED);
+        }
+        this.#outputAnalysisCount++;
     }
 
 
@@ -286,5 +323,6 @@ class CollaborationSession extends EventTarget {
 
 export {
     COLLABORATION_SESSION_STATE,
+    MAX_SESSION_OUTPUT_ANALYSES,
 };
 export default CollaborationSession;
