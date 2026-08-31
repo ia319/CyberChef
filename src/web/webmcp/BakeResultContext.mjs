@@ -107,7 +107,7 @@ function isBakeErrorContext(code, context) {
 
 
 /**
- * Projects one settled Run and Output provenance through the Gate B state allowlist.
+ * Projects one settled Run and Output provenance through the public state allowlist.
  *
  * @param {number|string} sessionEpoch - Active collaboration session identity.
  * @param {Object} result - Trusted Agent Bake service result.

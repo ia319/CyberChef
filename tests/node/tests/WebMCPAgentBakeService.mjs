@@ -54,6 +54,8 @@ function createFixture(options={}) {
             target: null,
             signal: null,
             provenance: null,
+            presentationCount: 0,
+            presentationSignal: null,
         },
         app = {options: {}},
         manager = {
@@ -78,6 +80,11 @@ function createFixture(options={}) {
                 }),
                 getOutputProvenance: () => evidence.provenance,
                 outputIsFresh: () => options.outputFresh ?? true,
+                waitForPresentation: async (provenance, signal) => {
+                    evidence.presentationCount++;
+                    evidence.presentationSignal = signal;
+                    return options.outputPresented ?? provenance === evidence.provenance;
+                },
             },
             tabs: {
                 getViewState: () => options.viewState ?? viewState,
@@ -194,8 +201,10 @@ TestRegister.addApiTests([
             assert.equal(result.target.bakeId, 11);
             assert.equal(result.provenance.outputVersion, 5);
             assert.strictEqual(evidence.signal, controller.signal);
+            assert.strictEqual(evidence.presentationSignal, controller.signal);
             assert.equal(evidence.flushCount, 1);
             assert.equal(evidence.workerCount, 1);
+            assert.equal(evidence.presentationCount, 1);
         }
     }),
 
@@ -258,6 +267,15 @@ TestRegister.addApiTests([
             error instanceof AgentBakeError &&
                 error.code === AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT
         );
+    }),
+
+    it("WebMCPAgentBakeService: should require visible Output publication", async () => {
+        const {service, evidence} = createFixture({outputPresented: false});
+        await assert.rejects(service.ensureActiveBake(7), error =>
+            error instanceof AgentBakeError &&
+                error.code === AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT
+        );
+        assert.equal(evidence.presentationCount, 1);
     }),
 
     it("WebMCPAgentBakeService: should return cancellation without restarting", async () => {

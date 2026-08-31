@@ -101,6 +101,7 @@ class AgentBakeService {
             typeof manager.output.getOutputState !== "function" ||
             typeof manager.output.getOutputProvenance !== "function" ||
             typeof manager.output.outputIsFresh !== "function" ||
+            typeof manager.output.waitForPresentation !== "function" ||
             typeof manager.tabs.getViewState !== "function" ||
             typeof manager.runTargets.capture !== "function" ||
             typeof manager.runTargets.requireActiveTarget !== "function" ||
@@ -275,7 +276,19 @@ class AgentBakeService {
             !outputProvenanceMatchesTarget(provenance, boundTarget, inputTarget.inputTabId) ||
             currentOutputState?.outputVersion !== provenance.outputVersion ||
             provenance.terminalState !== run.terminalState ||
-            provenance.progress !== inputOutcome.progress ||
+            provenance.progress !== inputOutcome.progress) {
+            throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);
+        }
+
+        const presented = await this.#manager.output.waitForPresentation(provenance, signal);
+        throwIfAborted(signal);
+        const presentedProvenance = this.#manager.output.getOutputProvenance(
+                inputTarget.outputTabId
+            ),
+            presentedOutputState = this.#manager.output.getOutputState(inputTarget.outputTabId);
+        if (!presented || presentedProvenance !== provenance ||
+            presentedOutputState?.outputVersion !== provenance.outputVersion ||
+            !this.#targetIsCurrent(boundTarget) ||
             run.terminalState === RUN_STATE.COMPLETED &&
                 !this.#manager.output.outputIsFresh(inputTarget.outputTabId)) {
             throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);

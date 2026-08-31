@@ -293,15 +293,16 @@ class OutputWaiter {
      * @param {string|ArrayBuffer} data
      * @param {boolean} [force=false]
      * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
+     * @returns {Promise<boolean>} Whether the editor published this render.
      */
     async setOutput(data, force=false, renderGeneration=null) {
-        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return false;
         // Don't do anything if the output hasn't changed
         if (!force && data === this.currentOutputCache &&
             (renderGeneration === null || renderGeneration === this.currentOutputCacheGeneration)) {
             this.manager.controls.hideStaleIndicator();
             this.toggleLoader(false);
-            return;
+            return true;
         }
 
         this.currentOutputCache = data;
@@ -352,8 +353,11 @@ class OutputWaiter {
         // We use setTimeout here to delay the editor dispatch until the next event cycle,
         // ensuring all async actions have completed before attempting to set the contents
         // of the editor. This is mainly with the above call to setWordWrap() in mind.
-        setTimeout(() => {
-            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
+        return await new Promise(resolve => setTimeout(() => {
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) {
+                resolve(false);
+                return;
+            }
             this.docChanging = true;
             // Insert data into editor, overwriting any previous contents
             this.outputEditorView.dispatch({
@@ -363,29 +367,29 @@ class OutputWaiter {
                     insert: data
                 }
             });
-
             // If turning word wrap on, do it after we populate the editor
             if (wrap)
                 setTimeout(() => {
                     if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
                     this.setWordWrap(wrap);
                 });
-        });
+            resolve(true);
+        }));
     }
 
     /**
      * Sets the value of the current output to a rendered HTML value
      * @param {string} html
      * @param {number|null} [renderGeneration=null] - In-flight Output render identity.
+     * @returns {Promise<boolean>} Whether the editor published this HTML render.
      */
     async setHTMLOutput(html, renderGeneration=null) {
-        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
-        await this.setOutput("", true, renderGeneration);
-        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
-
+        if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return false;
         this.htmlOutput.html = html;
         this.htmlOutput.changed = true;
-        // The pending editor update observes this HTML state when it renders.
+        const published = await this.setOutput("", true, renderGeneration);
+        if (!published || renderGeneration !== null &&
+            renderGeneration !== this.outputRenderGeneration) return false;
 
         // Turn off drawSelection
         this.outputEditorView.dispatch({
@@ -399,13 +403,16 @@ class OutputWaiter {
         const outputHTML = document.getElementById("output-html");
         const scriptElements = outputHTML ? outputHTML.querySelectorAll("script") : [];
         for (let i = 0; i < scriptElements.length; i++) {
-            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) return;
+            if (renderGeneration !== null && renderGeneration !== this.outputRenderGeneration) {
+                return false;
+            }
             try {
                 eval(scriptElements[i].innerHTML); // eslint-disable-line no-eval
             } catch (err) {
                 log.error(err);
             }
         }
+        return true;
     }
 
     /**
@@ -669,6 +676,47 @@ class OutputWaiter {
     }
 
     /**
+     * Waits until the exact active Output version is published to the visible editor.
+     *
+     * @param {Object} provenance - Immutable terminal Output provenance.
+     * @param {AbortSignal|null} [signal=null] - Optional collaboration cancellation signal.
+     * @returns {Promise<boolean>} Whether the same Output version remains visibly published.
+     */
+    async waitForPresentation(provenance, signal=null) {
+        const output = this.outputs[provenance?.outputTabId],
+            presentation = output?.presentation;
+        if (!output || output.provenance !== provenance ||
+            output.outputGeneration !== provenance.outputGeneration ||
+            output.outputVersion !== provenance.outputVersion ||
+            this.manager.tabs.getActiveTab("output") !== provenance.outputTabId ||
+            presentation?.outputGeneration !== provenance.outputGeneration ||
+            presentation?.outputVersion !== provenance.outputVersion) {
+            return false;
+        }
+
+        let published;
+        if (!signal) {
+            published = await presentation.completion;
+        } else {
+            if (signal.aborted) throw signal.reason;
+            let abortHandler;
+            const cancellation = new Promise((_, reject) => {
+                abortHandler = () => reject(signal.reason);
+                signal.addEventListener("abort", abortHandler, {once: true});
+            });
+            try {
+                published = await Promise.race([presentation.completion, cancellation]);
+            } finally {
+                signal.removeEventListener("abort", abortHandler);
+            }
+        }
+
+        return published === true && output.provenance === provenance &&
+            output.presentation === presentation &&
+            this.manager.tabs.getActiveTab("output") === provenance.outputTabId;
+    }
+
+    /**
      * Checks whether provenance still identifies the fresh visible Output.
      *
      * @param {Object|null} provenance - Immutable Output provenance.
@@ -731,7 +779,8 @@ class OutputWaiter {
             recipeRevision: null,
             progress: false,
             encoding: 0,
-            eolSequence: "\u000a"
+            eolSequence: "\u000a",
+            presentation: null
         };
 
         this.outputs[inputNum] = newOutput;
@@ -927,91 +976,112 @@ class OutputWaiter {
      * Sets the output in the output pane.
      *
      * @param {number} inputNum
+     * @returns {Promise<boolean>} Whether the selected Output remains visibly published.
      */
-    async set(inputNum) {
+    set(inputNum) {
         inputNum = parseInt(inputNum, 10);
         if (inputNum !== this.manager.tabs.getActiveTab("output") ||
-            !this.outputExists(inputNum)) return;
+            !this.outputExists(inputNum)) return Promise.resolve(false);
         const renderGeneration = ++this.outputRenderGeneration;
         this.toggleLoader(true);
 
-        return new Promise(async function(resolve, reject) {
-            const output = this.outputs[inputNum];
-            this.manager.timing.recordTime("settingOutput", inputNum);
+        const output = this.outputs[inputNum],
+            completion = this.renderOutput(output, inputNum, renderGeneration);
+        output.presentation = Object.freeze({
+            outputGeneration: output.outputGeneration,
+            outputVersion: output.outputVersion,
+            completion,
+        });
+        return completion;
+    }
 
-            // Update the EOL value
+    /**
+     * Publishes one Output record to the visible editor.
+     *
+     * @param {Object} output - Output record selected for presentation.
+     * @param {number} inputNum - Active Output tab identity.
+     * @param {number} renderGeneration - In-flight Output render identity.
+     * @returns {Promise<boolean>} Whether this render remains visibly published.
+     */
+    async renderOutput(output, inputNum, renderGeneration) {
+        this.manager.timing.recordTime("settingOutput", inputNum);
+
+        // Update the EOL value
+        this.outputEditorView.dispatch({
+            effects: this.outputEditorConf.eol.reconfigure(
+                EditorState.lineSeparator.of(output.eolSequence)
+            )
+        });
+
+        // If pending or baking, show loader and status message
+        // If error, style the tab and handle the error
+        // If done, display the output if it's the active tab
+        // If inactive, show the last bake value (or blank)
+        const stale = output.status === "inactive" || output.status === "stale" ||
+                (output.status === "baked" && !this.outputIsFresh(inputNum));
+        if (stale) {
+            this.manager.controls.showStaleIndicator();
+        } else {
+            this.manager.controls.hideStaleIndicator();
+        }
+
+        if (output.progress !== undefined && !this.app.baking) {
+            this.manager.recipe.updateBreakpointIndicator(output.progress);
+        } else {
+            this.manager.recipe.updateBreakpointIndicator(false);
+        }
+
+        if (output.status === "pending" || output.status === "baking") {
+            // show the loader and the status message if it's being shown
+            // otherwise don't do anything
+            document.querySelector("#output-loader .loading-msg").textContent = output.statusMessage;
+        } else if (output.status === "error") {
+            this.clearHTMLOutput();
+
+            if (output.error) {
+                return await this.setOutput(output.error, false, renderGeneration);
+            }
+            return await this.setOutput(output.data.result, false, renderGeneration);
+        } else if (output.status === "baked" || output.status === "inactive" ||
+                output.status === "stale") {
+            document.querySelector("#output-loader .loading-msg").textContent = `Loading output ${inputNum}`;
+
+            if (output.data === null) {
+                this.clearHTMLOutput();
+                return await this.setOutput("", false, renderGeneration);
+            }
+
+            let published;
+            switch (output.data.type) {
+                case "html":
+                    published = await this.setHTMLOutput(output.data.result, renderGeneration);
+                    break;
+                case "ArrayBuffer":
+                case "string":
+                default:
+                    this.clearHTMLOutput();
+                    published = await this.setOutput(
+                        output.data.result,
+                        false,
+                        renderGeneration
+                    );
+                    break;
+            }
+            if (!published || renderGeneration !== this.outputRenderGeneration) return false;
+            if (stale) this.manager.controls.showStaleIndicator();
+            this.manager.timing.recordTime("complete", inputNum);
+
+            // Trigger an update so that the status bar recalculates timings
             this.outputEditorView.dispatch({
-                effects: this.outputEditorConf.eol.reconfigure(
-                    EditorState.lineSeparator.of(output.eolSequence)
-                )
+                changes: {
+                    from: 0,
+                    to: 0
+                }
             });
 
-            // If pending or baking, show loader and status message
-            // If error, style the tab and handle the error
-            // If done, display the output if it's the active tab
-            // If inactive, show the last bake value (or blank)
-            const stale = output.status === "inactive" || output.status === "stale" ||
-                (output.status === "baked" && !this.outputIsFresh(inputNum));
-            if (stale) {
-                this.manager.controls.showStaleIndicator();
-            } else {
-                this.manager.controls.hideStaleIndicator();
-            }
-
-            if (output.progress !== undefined && !this.app.baking) {
-                this.manager.recipe.updateBreakpointIndicator(output.progress);
-            } else {
-                this.manager.recipe.updateBreakpointIndicator(false);
-            }
-
-            if (output.status === "pending" || output.status === "baking") {
-                // show the loader and the status message if it's being shown
-                // otherwise don't do anything
-                document.querySelector("#output-loader .loading-msg").textContent = output.statusMessage;
-            } else if (output.status === "error") {
-                this.clearHTMLOutput();
-
-                if (output.error) {
-                    await this.setOutput(output.error, false, renderGeneration);
-                } else {
-                    await this.setOutput(output.data.result, false, renderGeneration);
-                }
-            } else if (output.status === "baked" || output.status === "inactive" ||
-                output.status === "stale") {
-                document.querySelector("#output-loader .loading-msg").textContent = `Loading output ${inputNum}`;
-
-                if (output.data === null) {
-                    this.clearHTMLOutput();
-                    await this.setOutput("", false, renderGeneration);
-                    return;
-                }
-
-                switch (output.data.type) {
-                    case "html":
-                        await this.setHTMLOutput(output.data.result, renderGeneration);
-                        break;
-                    case "ArrayBuffer":
-                    case "string":
-                    default:
-                        this.clearHTMLOutput();
-                        await this.setOutput(output.data.result, false, renderGeneration);
-                        break;
-                }
-                if (renderGeneration !== this.outputRenderGeneration) return;
-                if (stale) this.manager.controls.showStaleIndicator();
-                this.manager.timing.recordTime("complete", inputNum);
-
-                // Trigger an update so that the status bar recalculates timings
-                this.outputEditorView.dispatch({
-                    changes: {
-                        from: 0,
-                        to: 0
-                    }
-                });
-
-                debounce(this.backgroundMagic, 50, "backgroundMagic", this, [])();
-            }
-        }.bind(this));
+            debounce(this.backgroundMagic, 50, "backgroundMagic", this, [])();
+        }
+        return renderGeneration === this.outputRenderGeneration;
     }
 
     /**
