@@ -624,6 +624,9 @@ class OutputWaiter {
             ),
         }));
 
+        for (const inputTarget of target.inputTargets) {
+            this.manager.background?.invalidateOutputAnalysis(inputTarget.outputTabId);
+        }
         for (const {output, provenance} of bindings) {
             output.outputVersion = provenance.outputVersion;
             output.provenance = provenance;
@@ -883,6 +886,7 @@ class OutputWaiter {
     markRecipeStale() {
         this.outputRenderGeneration++;
         this.hideMagicButton();
+        this.manager.background?.invalidateAnalysis();
         for (const [inputNum, output] of Object.entries(this.outputs)) {
             output.status = "stale";
             this.displayTabInfo(inputNum);
@@ -905,6 +909,7 @@ class OutputWaiter {
             const output = this.outputs[inputTarget.outputTabId];
             if (!output || output.outputGeneration !== inputTarget.outputGeneration) continue;
             output.status = "stale";
+            this.manager.background?.invalidateOutputAnalysis(inputTarget.outputTabId);
             this.displayTabInfo(inputTarget.outputTabId);
             changed = true;
             if (inputTarget.outputTabId === activeOutputTabId) activeOutputChanged = true;
@@ -955,6 +960,7 @@ class OutputWaiter {
     removeOutput(inputNum) {
         if (!this.outputExists(inputNum)) return;
 
+        this.manager.background?.invalidateOutputAnalysis(inputNum);
         this.outputRenderGeneration++;
         delete this.outputs[inputNum];
     }
@@ -963,6 +969,7 @@ class OutputWaiter {
      * Removes all output tabs
      */
     removeAllOutputs() {
+        this.manager.background?.invalidateAnalysis();
         this.outputRenderGeneration++;
         this.outputs = {};
 
@@ -1422,6 +1429,9 @@ class OutputWaiter {
         const currentNum = this.manager.tabs.getActiveTab("output");
 
         this.hideMagicButton();
+        if (currentNum !== inputNum) {
+            this.manager.background?.invalidateOutputAnalysis(currentNum);
+        }
 
         if (!this.manager.tabs.changeTab(inputNum, "output")) {
             let direction = "right";

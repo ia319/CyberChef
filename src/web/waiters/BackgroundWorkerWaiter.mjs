@@ -162,6 +162,25 @@ class BackgroundWorkerWaiter {
 
 
     /**
+     * Invalidates active analysis when its Output is replaced or leaves the active view.
+     *
+     * @param {number} outputTabId - Output tab identity.
+     * @returns {boolean} Whether matching work was cancelled as stale.
+     */
+    invalidateOutputAnalysis(outputTabId) {
+        const active = this.activeAnalysis,
+            analysis = active ? this.manager.analyses.getAnalysis(active.analysisId) : null;
+        if (!analysis || analysis.target.outputTabId !== outputTabId) return false;
+        const settled = this.manager.analyses.settle(
+            analysis.analysisId,
+            ANALYSIS_STATE.STALE
+        );
+        this.cancelAnalysis(analysis.analysisId);
+        return settled;
+    }
+
+
+    /**
      * Asks the ChefWorker to bake the input using the specified recipe.
      *
      * @param {string} input

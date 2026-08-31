@@ -815,6 +815,47 @@ module.exports = {
             const recipeBeforeStaleClick = JSON.stringify(app.getRecipeConfig());
             bindOutput("superseded");
             outputWaiter.magicClick();
+            const lifecycleProvenance = bindOutput("completed"),
+                staleRequest = manager.analyses.ensure(lifecycleProvenance, {
+                    owner: "ui",
+                    timeoutMs: 0,
+                });
+            manager.background.activeAnalysis = {
+                analysisId: staleRequest.analysis.analysisId,
+                workerRequestId: Number.MAX_SAFE_INTEGER,
+                provenance: lifecycleProvenance,
+            };
+            manager.analyses.markRunning(staleRequest.analysis.analysisId);
+            outputWaiter.markRecipeStale();
+            const staleLifecycleState = (await staleRequest.completion).analysis.terminalState;
+
+            const failureProvenance = bindOutput("completed"),
+                failureRequest = manager.analyses.ensure(failureProvenance, {
+                    owner: "ui",
+                    timeoutMs: 0,
+                });
+            manager.background.activeAnalysis = {
+                analysisId: failureRequest.analysis.analysisId,
+                workerRequestId: Number.MAX_SAFE_INTEGER,
+                provenance: failureProvenance,
+            };
+            manager.analyses.markRunning(failureRequest.analysis.analysisId);
+            manager.background.handleChefFailure();
+            const failureLifecycleState = (await failureRequest.completion).analysis.terminalState;
+
+            const timeoutProvenance = bindOutput("completed"),
+                timeoutRequest = manager.analyses.ensure(timeoutProvenance, {
+                    owner: "ui",
+                    timeoutMs: 20,
+                });
+            manager.background.activeAnalysis = {
+                analysisId: timeoutRequest.analysis.analysisId,
+                workerRequestId: Number.MAX_SAFE_INTEGER,
+                provenance: timeoutProvenance,
+            };
+            manager.analyses.markRunning(timeoutRequest.analysis.analysisId);
+            const timeoutLifecycleState = (await timeoutRequest.completion).analysis.terminalState,
+                analysisAdapterSettled = manager.background.activeAnalysis === null;
             done({
                 dispatchBound: dispatchedProvenance === firstProvenance,
                 currentResultVisible,
@@ -823,6 +864,10 @@ module.exports = {
                 staleResultVisible,
                 staleClickChangedRecipe: JSON.stringify(app.getRecipeConfig()) !== recipeBeforeStaleClick,
                 magicHiddenAfterStaleClick: document.getElementById("magic").classList.contains("hidden"),
+                staleLifecycleState,
+                failureLifecycleState,
+                timeoutLifecycleState,
+                analysisAdapterSettled,
             });
         }, [], ({value}) => {
             browser.assert.strictEqual(value.dispatchBound, true);
@@ -832,6 +877,10 @@ module.exports = {
             browser.assert.strictEqual(value.staleResultVisible, false);
             browser.assert.strictEqual(value.staleClickChangedRecipe, false);
             browser.assert.strictEqual(value.magicHiddenAfterStaleClick, true);
+            browser.assert.strictEqual(value.staleLifecycleState, "stale");
+            browser.assert.strictEqual(value.failureLifecycleState, "failed");
+            browser.assert.strictEqual(value.timeoutLifecycleState, "timedOut");
+            browser.assert.strictEqual(value.analysisAdapterSettled, true);
         });
     },
 
