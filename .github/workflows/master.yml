@@ -47,9 +47,6 @@ jobs:
         if: success()
         run: npx grunt prod --msg=""
 
-      - name: Generate sitemap
-        run: npx grunt exec:sitemap
-
       - name: Setup Chrome
         id: setup-chrome
         if: success()
@@ -63,10 +60,6 @@ jobs:
           export PATH=${{ steps.setup-chrome.outputs.chromedir }}:$PATH
           sudo apt-get install xvfb
           xvfb-run --server-args="-screen 0 1200x800x24" npx grunt testui
-
-      - name: Prepare for GitHub Pages
-        if: success() && matrix.node-version == 24
-        run: npx grunt copy:ghPages
 
       - name: Deploy to GitHub Pages
         if: success() && github.ref == 'refs/heads/master' && matrix.node-version == 24
