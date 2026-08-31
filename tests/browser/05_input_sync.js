@@ -465,6 +465,50 @@ module.exports = {
         });
     },
 
+    "Input Worker replacement rejects pending reads": browser => {
+        browser.executeAsync(async done => {
+            try {
+                const input = window.app.manager.input,
+                    oldWorker = input.inputWorker,
+                    originalPostMessage = oldWorker.postMessage.bind(oldWorker);
+                oldWorker.postMessage = (...args) => {
+                    if (args[0]?.action === "getInput") return;
+                    return originalPostMessage(...args);
+                };
+
+                const pendingRead = input.getInputValue(1).then(
+                    () => ({state: "resolved"}),
+                    err => ({state: "rejected", name: err.name})
+                );
+                input.clearAllIoClick();
+
+                const outcome = await Promise.race([
+                        pendingRead,
+                        new Promise(resolve => setTimeout(
+                            () => resolve({state: "timed-out"}),
+                            500
+                        )),
+                    ]),
+                    currentState = await input.getInputState(1);
+                done({
+                    outcome,
+                    workerReplaced: input.inputWorker !== oldWorker,
+                    inputNum: currentState.inputNum,
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.deepStrictEqual(value.outcome, {
+                state: "rejected",
+                name: "AbortError",
+            });
+            browser.assert.strictEqual(value.workerReplaced, true);
+            browser.assert.strictEqual(value.inputNum, 1);
+        });
+    },
+
     after: browser => {
         browser.end();
     },

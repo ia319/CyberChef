@@ -72,7 +72,7 @@ class InputWaiter {
         this.loaderWorkers = [];
         this.workerId = 0;
         this.maxTabs = this.manager.tabs.calcMaxTabs();
-        this.callbacks = {};
+        this.inputRequests = new Map();
         this.callbackID = 0;
         this.fileDetails = {};
         this.inputSync = new InputSyncController();
@@ -362,6 +362,11 @@ class InputWaiter {
         this.inputFlush = null;
         this.inputUpdates.clear();
         this.inputSync.reset();
+        const replacementError = new DOMException("Input Worker was replaced", "AbortError");
+        for (const request of this.inputRequests.values()) {
+            request.reject(replacementError);
+        }
+        this.inputRequests.clear();
         if (this.inputWorker !== null) {
             this.inputWorker.terminate();
             this.inputWorker = null;
@@ -604,9 +609,9 @@ class InputWaiter {
             case "getInput":
             case "getInputNums":
             case "getInputState": {
-                const callback = this.callbacks[r.data.id];
-                delete this.callbacks[r.data.id];
-                if (callback) callback(r.data);
+                const request = this.inputRequests.get(r.data.id);
+                this.inputRequests.delete(r.data.id);
+                request?.resolve(r.data);
                 break;
             }
             case "removeChefWorker":
@@ -903,10 +908,10 @@ class InputWaiter {
      * @returns {ArrayBuffer | string}
      */
     async getInputValue(inputNum) {
-        return await new Promise(resolve => {
+        return await new Promise((resolve, reject) => {
             this.getInputFromWorker(inputNum, false, r => {
                 resolve(r.data);
-            });
+            }, reject);
         });
     }
 
@@ -917,10 +922,10 @@ class InputWaiter {
      * @returns {object}
      */
     async getInputObj(inputNum) {
-        return await new Promise(resolve => {
+        return await new Promise((resolve, reject) => {
             this.getInputFromWorker(inputNum, true, r => {
                 resolve(r.data);
-            });
+            }, reject);
         });
     }
 
@@ -937,13 +942,16 @@ class InputWaiter {
 
         return await new Promise((resolve, reject) => {
             const id = this.callbackID++;
-            this.callbacks[id] = response => {
-                if (!response.state) {
-                    reject(new RangeError("Input identity is unavailable"));
-                    return;
-                }
-                resolve(this.inputSync.registerState(response.state));
-            };
+            this.inputRequests.set(id, {
+                resolve: response => {
+                    if (!response.state) {
+                        reject(new RangeError("Input identity is unavailable"));
+                        return;
+                    }
+                    resolve(this.inputSync.registerState(response.state));
+                },
+                reject,
+            });
             this.inputWorker.postMessage({
                 action: "getInputState",
                 data: {id, inputNum},
@@ -970,12 +978,13 @@ class InputWaiter {
      * @param {number} inputNum - The inputNum of the data to get
      * @param {boolean} getObj - If true, get the actual data object of the input instead of just the value
      * @param {Function} callback - The callback to execute when the input is returned
-     * @returns {ArrayBuffer | string | object}
+     * @param {Function} reject - The callback to execute when the Worker is replaced
+     * @returns {void}
      */
-    getInputFromWorker(inputNum, getObj, callback) {
+    getInputFromWorker(inputNum, getObj, callback, reject) {
         const id = this.callbackID++;
 
-        this.callbacks[id] = callback;
+        this.inputRequests.set(id, {resolve: callback, reject});
 
         this.inputWorker.postMessage({
             action: "getInput",
@@ -993,21 +1002,25 @@ class InputWaiter {
      * @returns {object}
      */
     async getInputNums() {
-        return await new Promise(resolve => {
+        return await new Promise((resolve, reject) => {
             this.getNums(r => {
                 resolve(r);
-            });
+            }, reject);
         });
     }
 
     /**
      * Gets a list of inputNums from the inputWorker, and sends
-     * them back to the specified callback
+     * them back to the specified callback.
+     *
+     * @param {Function} callback - The callback to execute when the Input numbers are returned.
+     * @param {Function} reject - The callback to execute when the Worker is replaced.
+     * @returns {void}
      */
-    getNums(callback) {
+    getNums(callback, reject) {
         const id = this.callbackID++;
 
-        this.callbacks[id] = callback;
+        this.inputRequests.set(id, {resolve: callback, reject});
 
         this.inputWorker.postMessage({
             action: "getInputNums",
