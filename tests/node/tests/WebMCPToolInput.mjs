@@ -142,5 +142,24 @@ TestRegister.addApiTests([
 
         assert.equal(validateToolInput({type: "remove", stepId: "step-1"}, schema).valid, true);
         assert.equal(validateToolInput({type: "enable", stepId: "step-1"}, schema).valid, false);
+
+        const ambiguousSchema = {
+            oneOf: [
+                {
+                    type: "object",
+                    properties: {stepId: {type: "string", minLength: 1}},
+                    required: ["stepId"],
+                    additionalProperties: false,
+                },
+                {
+                    type: "object",
+                    properties: {stepId: {type: "string", maxLength: 64}},
+                    required: ["stepId"],
+                    additionalProperties: false,
+                },
+            ],
+        };
+
+        assert.equal(validateToolInput({stepId: "step-1"}, ambiguousSchema).valid, false);
     }),
 ]);
