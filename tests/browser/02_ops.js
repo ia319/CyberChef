@@ -144,6 +144,19 @@ module.exports = {
         // testOp(browser, "Extract email addresses", "test input", "test_output");
         // testOp(browser, "Extract file paths", "test input", "test_output");
         testOpFile(browser, "Extract Files", "files/Hitchhikers_Guide.jpeg", ".card:last-child .collapsed", "extracted_at_0x3d38.zlib");
+        browser.executeAsync(async done => {
+            const outputWaiter = window.app.manager.output,
+                outputTabId = window.app.manager.tabs.getActiveTab("output"),
+                dish = outputWaiter.getOutputDish(outputTabId);
+            try {
+                const value = await dish.clone().get("ArrayBuffer");
+                done(value instanceof ArrayBuffer);
+            } catch {
+                done(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value, true, "List<File> output converts to ArrayBuffer");
+        });
         // This test seems unreliable on GitHub Actions, not reproducible locally.
         // testOpFile(browser, "Extract ID3", "files/mp3example.mp3", "tr:last-child td:last-child", "Kevin MacLeod");        // testOp(browser, "Extract IP addresses", "test input", "test_output");
         // testOp(browser, "Extract LSB", "test input", "test_output");

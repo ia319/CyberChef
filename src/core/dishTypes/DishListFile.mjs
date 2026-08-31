@@ -22,7 +22,8 @@ class DishListFile extends DishType {
         if (isNodeEnvironment()) {
             this.value = this.value.map(file => Uint8Array.from(file.data));
         } else {
-            this.value = await DishListFile.concatenateTypedArraysWithTypedElements(...this.value);
+            const data = await DishListFile.concatenateTypedArraysWithTypedElements(...this.value);
+            this.value = data.buffer;
         }
     }
 
