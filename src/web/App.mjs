@@ -165,8 +165,11 @@ class App {
 
     /**
      * Runs Auto Bake if it is set.
+     *
+     * @param {number|null} [inputNum=null] - Input associated with the state change.
+     * @returns {void}
      */
-    autoBake() {
+    autoBake(inputNum=null) {
         if (this.baking) {
             this.manager.worker.cancelBakeForAutoBake();
             this.baking = false;
@@ -174,10 +177,8 @@ class App {
 
         if (this.autoBake_) {
             log.debug("Auto-baking");
-            this.manager.worker.bakeInputs({
-                nums: [this.manager.tabs.getActiveTab("input")],
-                step: false
-            });
+            const targetInputNum = inputNum ?? this.manager.tabs.getActiveTab("input");
+            this.manager.input.autoBake(targetInputNum);
         } else if (this.bakeStateId < this.stateChangeId) {
             // Only show stale-indicator if the most recent bake didn't cover the
             // current state. Without this guard, a debounced autoBake firing after
@@ -190,7 +191,16 @@ class App {
     /**
      * Executes the next step of the recipe.
      */
-    step() {
+    async step() {
+        if (this.baking) return;
+
+        try {
+            await this.manager.input.flushActiveInput();
+        } catch (err) {
+            this.handleError(err, true);
+            return;
+        }
+        cancelDebounce("stateChange");
         if (this.baking) return;
 
         // Reset status using cancelBake
@@ -245,15 +255,17 @@ class App {
         // If there isn't one, assume there are no inputs so use inputNum of 1
         let inputNum = this.manager.tabs.getActiveTab("input");
         if (inputNum === -1) inputNum = 1;
-        this.manager.input.updateInputValue(inputNum, input);
-
-        this.manager.input.inputWorker.postMessage({
-            action: "setInput",
-            data: {
-                inputNum: inputNum,
-                silent: true
-            }
-        });
+        this.manager.input.updateInputValue(inputNum, input)
+            .then(() => {
+                this.manager.input.inputWorker.postMessage({
+                    action: "setInput",
+                    data: {
+                        inputNum: inputNum,
+                        silent: true
+                    }
+                });
+            })
+            .catch(err => this.handleError(err, true));
     }
 
 
@@ -798,11 +810,12 @@ class App {
         // here and the debounced autoBake firing can record it via bakeStateId.
         this.stateChangeId++;
 
-        debounce(function() {
+        const inputNum = Number.isSafeInteger(e?.detail?.inputNum) ? e.detail.inputNum : null;
+        debounce(function(inputNum) {
             this.progress = 0;
-            this.autoBake();
+            this.autoBake(inputNum);
             this.updateURL(true, null, true);
-        }, 20, "stateChange", this, [])();
+        }, 20, "stateChange", this, [inputNum])();
     }
 
 

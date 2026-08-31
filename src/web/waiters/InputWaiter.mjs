@@ -7,7 +7,7 @@
 
 import LoaderWorker from "worker-loader?inline=no-fallback!../workers/LoaderWorker.js";
 import InputWorker from "worker-loader?inline=no-fallback!../workers/InputWorker.mjs";
-import Utils, {debounce} from "../../core/Utils.mjs";
+import Utils, {cancelDebounce, debounce} from "../../core/Utils.mjs";
 import {toBase64} from "../../core/lib/Base64.mjs";
 import cptable from "codepage";
 
@@ -43,6 +43,7 @@ import {
 import {statusBar} from "../utils/statusBar.mjs";
 import {fileDetailsPanel} from "../utils/fileDetails.mjs";
 import {eolCodeToSeq, eolCodeToName, renderSpecialChar} from "../utils/editorUtils.mjs";
+import {InputSyncController} from "../run/InputSyncController.mjs";
 
 
 /**
@@ -73,6 +74,11 @@ class InputWaiter {
         this.callbacks = {};
         this.callbackID = 0;
         this.fileDetails = {};
+        this.inputSync = new InputSyncController();
+        this.inputWorkerEpoch = 0;
+        this.pendingInputChange = null;
+        this.inputFlush = null;
+        this.inputUpdates = new Map();
 
         this.maxWorkers = 1;
         if (navigator.hardwareConcurrency !== undefined &&
@@ -211,6 +217,7 @@ class InputWaiter {
 
         // Reset the input so that lines are recalculated, preserving the old EOL values
         this.setInput(oldInputVal);
+        this.inputChange();
     }
 
     /**
@@ -349,6 +356,11 @@ class InputWaiter {
      * Terminates any existing workers and sets up a new InputWorker and LoaderWorker
      */
     setupInputWorker() {
+        cancelDebounce("inputChange");
+        this.pendingInputChange = null;
+        this.inputFlush = null;
+        this.inputUpdates.clear();
+        this.inputSync.reset();
         if (this.inputWorker !== null) {
             this.inputWorker.terminate();
             this.inputWorker = null;
@@ -359,7 +371,15 @@ class InputWaiter {
         }
 
         log.debug("Adding new InputWorker");
+        if (this.inputWorkerEpoch === Number.MAX_SAFE_INTEGER) {
+            throw new RangeError("InputWorker lifecycle identity limit reached");
+        }
+        this.inputWorkerEpoch++;
         this.inputWorker = new InputWorker();
+        this.inputWorker.postMessage({
+            action: "setIdentityEpoch",
+            data: this.inputWorkerEpoch,
+        });
         this.inputWorker.postMessage({
             action: "setLogLevel",
             data: log.getLevel()
@@ -553,7 +573,14 @@ class InputWaiter {
                 this.set(r.data.inputNum, r.data.inputObj, r.data.silent);
                 break;
             case "inputAdded":
-                this.inputAdded(r.data.changeTab, r.data.inputNum);
+                this.inputAdded(r.data.changeTab, r.data);
+                break;
+            case "inputUpdated":
+                if (r.data.syncId === null) {
+                    this.inputSync.registerState(r.data);
+                } else {
+                    this.inputSync.acknowledge(r.data);
+                }
                 break;
             case "queueInput":
                 this.manager.worker.queueInput(r.data);
@@ -575,8 +602,12 @@ class InputWaiter {
                 break;
             case "getInput":
             case "getInputNums":
-                this.callbacks[r.data.id](r.data);
+            case "getInputState": {
+                const callback = this.callbacks[r.data.id];
+                delete this.callbacks[r.data.id];
+                if (callback) callback(r.data);
                 break;
+            }
             case "removeChefWorker":
                 this.removeChefWorker();
                 break;
@@ -589,13 +620,38 @@ class InputWaiter {
     }
 
     /**
-     * Sends a message to the inputWorker to bake all inputs
+     * Synchronizes the active editor before requesting a Bake for all loaded Inputs.
+     *
+     * @returns {Promise<Object|null>} Synchronized active Input identity or null on failure.
      */
-    bakeAll() {
+    async bakeAll() {
         this.app.progress = 0;
-        debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["loading"]);
+        debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["loading"])();
+        let inputState;
+        try {
+            inputState = await this.flushActiveInput();
+        } catch (err) {
+            this.app.handleError(err, true);
+            debounce(this.manager.controls.toggleBakeButtonFunction, 20, "toggleBakeButton", this, ["bake"])();
+            return null;
+        }
+        cancelDebounce("stateChange");
         this.inputWorker.postMessage({
-            action: "bakeAll"
+            action: "bakeAll",
+        });
+        return inputState;
+    }
+
+    /**
+     * Requests Auto Bake for one already synchronized Input.
+     *
+     * @param {number} inputNum - Input number captured by the state change.
+     * @returns {void}
+     */
+    autoBake(inputNum) {
+        this.inputWorker.postMessage({
+            action: "autobake",
+            data: {activeTab: inputNum},
         });
     }
 
@@ -774,19 +830,25 @@ class InputWaiter {
      *
      * @param {number} inputNum
      * @param {string | ArrayBuffer} value
+     * @returns {Promise<Object>} Worker-confirmed Input identity.
+     * @throws {Error} When the Input cannot be synchronized.
      */
-    updateInputValue(inputNum, value, force=false) {
+    async updateInputValue(inputNum, value) {
+        const encoding = this.getChrEnc(),
+            eolSequence = this.getEOLSeq(),
+            inputState = this.inputSync.getState(inputNum) ?? await this.getInputState(inputNum),
+            update = this.inputSync.startUpdate(inputNum);
+
         // Prepare the value as a buffer (full value) and a string sample (up to 4096 bytes)
         let buffer;
         let stringSample = "";
 
         // If value is a string, interpret it using the specified character encoding
-        const tabNum = this.manager.tabs.getActiveTab("input");
-        this.manager.timing.recordTime("inputEncodingStart", tabNum);
+        this.manager.timing.recordTime("inputEncodingStart", inputNum);
         if (typeof value === "string") {
             stringSample = value.slice(0, 4096);
-            if (this.getChrEnc() > 0) {
-                buffer = cptable.utils.encode(this.getChrEnc(), value);
+            if (encoding > 0) {
+                buffer = cptable.utils.encode(encoding, value);
                 buffer = new Uint8Array(buffer).buffer;
             } else {
                 buffer = Utils.strToArrayBuffer(value);
@@ -795,12 +857,11 @@ class InputWaiter {
             buffer = value;
             stringSample = Utils.arrayBufferToStr(value.slice(0, 4096));
         }
-        this.manager.timing.recordTime("inputEncodingEnd", tabNum);
+        this.manager.timing.recordTime("inputEncodingEnd", inputNum);
 
         // Update the deep link
         const recipeStr = buffer.byteLength < 51200 ? toBase64(buffer, "A-Za-z0-9+/") : ""; // B64 alphabet with no padding
         const includeInput = recipeStr.length > 0 && buffer.byteLength < 51200;
-        this.app.updateURL(includeInput, recipeStr);
 
         // Post new value to the InputWorker
         const transferable = [buffer];
@@ -808,12 +869,29 @@ class InputWaiter {
             action: "updateInputValue",
             data: {
                 inputNum: inputNum,
+                inputGeneration: inputState.inputGeneration,
+                syncId: update.request.syncId,
                 buffer: buffer,
                 stringSample: stringSample,
-                encoding: this.getChrEnc(),
-                eolSequence: this.getEOLSeq()
+                encoding,
+                eolSequence,
             }
         }, transferable);
+
+        const completion = update.completion.then(result => {
+            if (!result.ok) throw new Error("Input could not be synchronized");
+            this.app.updateURL(includeInput, recipeStr);
+            return result.state;
+        });
+        this.inputUpdates.set(inputNum, completion);
+
+        try {
+            return await completion;
+        } finally {
+            if (this.inputUpdates.get(inputNum) === completion) {
+                this.inputUpdates.delete(inputNum);
+            }
+        }
     }
 
     /**
@@ -840,6 +918,33 @@ class InputWaiter {
         return await new Promise(resolve => {
             this.getInputFromWorker(inputNum, true, r => {
                 resolve(r.data);
+            });
+        });
+    }
+
+    /**
+     * Returns the current Worker-confirmed Input identity without reading its content.
+     *
+     * @param {number} inputNum - Input number.
+     * @returns {Promise<Object>} Immutable Input identity.
+     * @throws {RangeError} When the Input no longer exists.
+     */
+    async getInputState(inputNum) {
+        const known = this.inputSync.getState(inputNum);
+        if (known) return known;
+
+        return await new Promise((resolve, reject) => {
+            const id = this.callbackID++;
+            this.callbacks[id] = response => {
+                if (!response.state) {
+                    reject(new RangeError("Input identity is unavailable"));
+                    return;
+                }
+                resolve(this.inputSync.registerState(response.state));
+            };
+            this.inputWorker.postMessage({
+                action: "getInputState",
+                data: {id, inputNum},
             });
         });
     }
@@ -913,19 +1018,78 @@ class InputWaiter {
         else if (inputLength < 1000000) delay = 200;
         else delay = 500;
 
-        debounce(function(e) {
-            const value = this.getInput();
-            const activeTab = this.manager.tabs.getActiveTab("input");
+        const inputNum = this.manager.tabs.getActiveTab("input"),
+            inputState = this.inputSync.getState(inputNum);
+        this.pendingInputChange = {
+            inputNum,
+            inputGeneration: inputState?.inputGeneration ?? null,
+        };
 
-            this.updateInputValue(activeTab, value);
-            this.inputWorker.postMessage({
-                action: "updateTabHeader",
-                data: activeTab
-            });
+        debounce(function() {
+            this.flushActiveInput().catch(err => this.app.handleError(err, true));
+        }, delay, "inputChange", this, [])();
+    }
 
-            // Fire the statechange event as the input has been modified
-            window.dispatchEvent(this.manager.statechange);
-        }, delay, "inputChange", this, [e])();
+    /**
+     * Flushes the active editor into the InputWorker and waits for its revision acknowledgement.
+     *
+     * @returns {Promise<Object>} Worker-confirmed Input identity.
+     * @throws {Error} When the pending editor no longer belongs to the active Input.
+     */
+    async flushActiveInput() {
+        cancelDebounce("inputChange");
+        const inputNum = this.manager.tabs.getActiveTab("input");
+
+        if (this.inputFlush) {
+            await this.inputFlush.completion;
+            return await this.flushActiveInput();
+        }
+
+        const completion = this.flushPendingInputChanges(inputNum);
+        this.inputFlush = {inputNum, completion};
+
+        try {
+            return await completion;
+        } finally {
+            if (this.inputFlush?.completion === completion) this.inputFlush = null;
+        }
+    }
+
+    /**
+     * Serializes pending editor writes for one active Input.
+     *
+     * @param {number} inputNum - Active Input number captured before synchronization.
+     * @returns {Promise<Object>} Worker-confirmed Input identity.
+     * @throws {Error} When the active Input changes during synchronization.
+     */
+    async flushPendingInputChanges(inputNum) {
+        const inputUpdate = this.inputUpdates.get(inputNum);
+        if (inputUpdate) await inputUpdate;
+        const pending = this.pendingInputChange;
+        if (!pending) return await this.getInputState(inputNum);
+
+        const currentState = await this.getInputState(inputNum);
+        if (pending.inputNum !== inputNum ||
+            pending.inputGeneration !== null &&
+            pending.inputGeneration !== currentState.inputGeneration) {
+            throw new Error("Pending Input no longer matches the active tab");
+        }
+
+        this.pendingInputChange = null;
+        const value = this.getInput(),
+            state = await this.updateInputValue(inputNum, value);
+        this.inputWorker.postMessage({
+            action: "updateTabHeader",
+            data: inputNum,
+        });
+        window.dispatchEvent(new CustomEvent("statechange", {
+            detail: {inputNum: state.inputNum},
+        }));
+
+        if (this.pendingInputChange?.inputNum === inputNum) {
+            return await this.flushPendingInputChanges(inputNum);
+        }
+        return state;
     }
 
     /**
@@ -1257,6 +1421,16 @@ class InputWaiter {
      * @param {boolean} [changeOutput=false] - If true, also changes the output
      */
     changeTab(inputNum, changeOutput=false) {
+        const activeInputNum = this.manager.tabs.getActiveTab("input"),
+            syncPending = this.pendingInputChange?.inputNum === activeInputNum ||
+                this.inputFlush?.inputNum === activeInputNum;
+        if (inputNum !== activeInputNum && syncPending) {
+            this.flushActiveInput()
+                .then(() => this.changeTab(inputNum, changeOutput))
+                .catch(err => this.app.handleError(err, true));
+            return;
+        }
+
         if (this.manager.tabs.getTabItem(inputNum, "input") !== null) {
             this.manager.tabs.changeTab(inputNum, "input");
             this.inputWorker.postMessage({
@@ -1387,9 +1561,11 @@ class InputWaiter {
      * Handler for when the inputWorker adds a new input
      *
      * @param {boolean} changeTab - Whether or not to change to the new input tab
-     * @param {number} inputNum - The new inputNum
+     * @param {Object} inputState - Worker-confirmed Input identity.
      */
-    inputAdded(changeTab, inputNum) {
+    inputAdded(changeTab, inputState) {
+        const registered = this.inputSync.registerState(inputState),
+            inputNum = registered.inputNum;
         this.addTab(inputNum, changeTab);
 
         this.manager.output.addOutput(inputNum, changeTab);
@@ -1464,6 +1640,11 @@ class InputWaiter {
      * @param {number} inputNum - The inputNum of the tab to be removed
      */
     removeInput(inputNum) {
+        if (this.pendingInputChange?.inputNum === inputNum) {
+            cancelDebounce("inputChange");
+            this.pendingInputChange = null;
+        }
+        this.inputSync.removeState(inputNum);
         let refresh = false;
         if (this.manager.tabs.getTabItem(inputNum, "input") !== null) {
             refresh = true;

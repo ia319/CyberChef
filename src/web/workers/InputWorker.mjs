@@ -36,6 +36,8 @@ self.maxTabs = 1;
  * @property {number} progress
  * @property {number} encoding
  * @property {string} eolSequence
+ * @property {string} inputGeneration
+ * @property {number} inputRevision
  */
 self.inputs = {};
 self.loaderWorkers = [];
@@ -44,6 +46,8 @@ self.currentInputNum = 1;
 self.numInputs = 0;
 self.pendingInputs = 0;
 self.loadingInputs = 0;
+self.identityEpoch = 0;
+self.nextInputGeneration = 1;
 
 /**
  * Respond to message from parent thread.
@@ -71,6 +75,9 @@ self.addEventListener("message", function(e) {
             break;
         case "updateMaxTabs":
             self.updateMaxTabs(r.data.maxTabs, r.data.activeTab);
+            break;
+        case "setIdentityEpoch":
+            self.setIdentityEpoch(r.data);
             break;
         case "updateInputValue":
             self.updateInputValue(r.data);
@@ -129,10 +136,76 @@ self.addEventListener("message", function(e) {
         case "getInputNums":
             self.getInputNums(r.data);
             break;
+        case "getInputState":
+            self.getInputState(r.data);
+            break;
         default:
             log.error(`Unknown action '${r.action}'.`);
     }
 });
+
+
+/**
+ * Establishes the main-thread lifecycle identity for this InputWorker.
+ *
+ * @param {number} epoch - Monotonic InputWorker lifecycle number.
+ * @returns {void}
+ * @throws {RangeError} When the epoch is invalid or changes after Input creation.
+ */
+self.setIdentityEpoch = function(epoch) {
+    if (!Number.isSafeInteger(epoch) || epoch < 1 || self.numInputs > 0) {
+        throw new RangeError("InputWorker identity epoch is invalid");
+    }
+    self.identityEpoch = epoch;
+};
+
+
+/**
+ * Allocates an identity that cannot collide across InputWorker restarts.
+ *
+ * @returns {string} Opaque Input generation.
+ * @throws {RangeError} When identity allocation is unavailable or exhausted.
+ */
+self.createInputGeneration = function() {
+    if (self.identityEpoch < 1 || self.nextInputGeneration === Number.MAX_SAFE_INTEGER) {
+        throw new RangeError("Input generation is unavailable");
+    }
+    return `${self.identityEpoch}:${self.nextInputGeneration++}`;
+};
+
+
+/**
+ * Returns a content-free identity record for one Input.
+ *
+ * @param {number} inputNum - Input number.
+ * @returns {Object|null} Input identity or null.
+ */
+self.getInputStateData = function(inputNum) {
+    const input = self.inputs[inputNum];
+    if (!input) return null;
+    return {
+        inputNum: parseInt(inputNum, 10),
+        inputGeneration: input.inputGeneration,
+        inputRevision: input.inputRevision,
+    };
+};
+
+
+/**
+ * Replies to a content-free Input identity request.
+ *
+ * @param {Object} request - Main-thread request.
+ * @returns {void}
+ */
+self.getInputState = function(request) {
+    self.postMessage({
+        action: "getInputState",
+        data: {
+            id: request.id,
+            state: self.getInputStateData(request.inputNum),
+        },
+    });
+};
 
 /**
  * Gets the load progress of the input files, and the
@@ -510,27 +583,56 @@ self.updateInputProgress = function(inputData) {
  * @param {number} [inputData.encoding] - The character encoding of the input data
  * @param {string} [inputData.eolSequence] - The end of line sequence of the input data
  * @param {string} [inputData.stringSample] - A sample of the value as a string (truncated to 4096 chars)
+ * @param {string} [inputData.inputGeneration] - Expected opaque Input generation.
+ * @param {number} [inputData.syncId] - Main-thread synchronization request identity.
+ * @returns {boolean} Whether the update was applied.
  */
 self.updateInputValue = function(inputData) {
     const inputNum = parseInt(inputData.inputNum, 10);
-    if (inputNum < 1) return;
+    const input = self.inputs[inputNum],
+        syncId = Number.isSafeInteger(inputData.syncId) ? inputData.syncId : null,
+        generationMatches = typeof inputData.inputGeneration === "undefined" ||
+            input?.inputGeneration === inputData.inputGeneration;
+    if (inputNum < 1 || !input || !generationMatches ||
+        input.inputRevision === Number.MAX_SAFE_INTEGER) {
+        if (syncId !== null) {
+            self.postMessage({
+                action: "inputUpdated",
+                data: {
+                    syncId,
+                    inputNum,
+                    inputGeneration: input?.inputGeneration ?? null,
+                    inputRevision: input?.inputRevision ?? null,
+                    applied: false,
+                },
+            });
+        }
+        return false;
+    }
 
-    if (!Object.prototype.hasOwnProperty.call(self.inputs, inputNum))
-        throw new Error(`No input with ID ${inputNum} exists`);
-
-    self.inputs[inputNum].buffer = inputData.buffer;
+    input.buffer = inputData.buffer;
     if ("encoding" in inputData) {
-        self.inputs[inputNum].encoding = inputData.encoding;
+        input.encoding = inputData.encoding;
     }
     if ("eolSequence" in inputData) {
-        self.inputs[inputNum].eolSequence = inputData.eolSequence;
+        input.eolSequence = inputData.eolSequence;
     }
     if (!("stringSample" in inputData)) {
         inputData.stringSample = Utils.arrayBufferToStr(inputData.buffer.slice(0, 4096));
     }
-    self.inputs[inputNum].stringSample = inputData.stringSample;
-    self.inputs[inputNum].status = "loaded";
-    self.inputs[inputNum].progress = 100;
+    input.stringSample = inputData.stringSample;
+    input.status = "loaded";
+    input.progress = 100;
+    input.inputRevision++;
+    self.postMessage({
+        action: "inputUpdated",
+        data: {
+            syncId,
+            ...self.getInputStateData(inputNum),
+            applied: true,
+        },
+    });
+    return true;
 };
 
 /**
@@ -760,7 +862,9 @@ self.addInput = function(
         status: "pending",
         progress: 0,
         encoding: 0,
-        eolSequence: "\u000a"
+        eolSequence: "\u000a",
+        inputGeneration: self.createInputGeneration(),
+        inputRevision: 0,
     };
 
     switch (type) {
@@ -790,7 +894,7 @@ self.addInput = function(
         action: "inputAdded",
         data: {
             changeTab: changeTab,
-            inputNum: inputNum
+            ...self.getInputStateData(inputNum),
         }
     });
 
