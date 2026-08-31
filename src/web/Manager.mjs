@@ -24,6 +24,8 @@ import {ACTIVE_BUILD_PROFILE} from "./webmcp/BuildProfiles.mjs";
 import {AGENT_RECIPE_PATCH_POLICY} from "./webmcp/AgentRecipePatchPolicy.mjs";
 import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
 import {createRecipeToolHandlers} from "./webmcp/RecipeToolHandlers.mjs";
+import {createBakeRecipeToolHandlers} from "./webmcp/BakeRecipeToolHandlers.mjs";
+import {AgentBakeService} from "./webmcp/AgentBakeService.mjs";
 import {TOOL_NAME} from "./webmcp/ToolDefinitions.mjs";
 import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
 import {RunCoordinator} from "./run/RunCoordinator.mjs";
@@ -93,6 +95,7 @@ class Manager {
         this.seasonal    = new SeasonalWaiter(this.app, this);
         this.bindings    = new BindingsWaiter(this.app, this);
         this.background  = new BackgroundWorkerWaiter(this.app, this);
+        this.agentBake   = new AgentBakeService(this.app, this);
         this.webmcp      = new WebMCPWaiter(
             document.modelContext,
             document,
@@ -101,6 +104,7 @@ class Manager {
             {
                 ...OPERATION_TOOL_HANDLERS,
                 ...createRecipeToolHandlers(this.recipe),
+                ...createBakeRecipeToolHandlers(this.agentBake),
             }
         );
         this.collaboration = new CollaborationWaiter(
