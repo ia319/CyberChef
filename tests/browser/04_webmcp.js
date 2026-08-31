@@ -13,23 +13,25 @@ module.exports = {
             .resizeWindow(1280, 1000)
             .url(browser.launchUrl)
             .useCss()
-            .waitForElementNotPresent("#preloader", 10000)
-            .execute(() => {
-                window.__invokeWebMCPTool = async (tool, input) => {
-                    let result;
-                    try {
-                        result = await document.modelContext.executeTool(
-                            tool,
-                            JSON.stringify(input)
-                        );
-                    } catch (err) {
-                        if (!(err instanceof TypeError)) throw err;
-                        result = await document.modelContext.executeTool(tool, input);
-                    }
-                    return typeof result === "string" ? JSON.parse(result) : result;
-                };
+            .waitForElementNotPresent("#preloader", 10000);
+    },
 
-            });
+    beforeEach: browser => {
+        browser.execute(() => {
+            window.__invokeWebMCPTool = async (tool, input) => {
+                let result;
+                try {
+                    result = await document.modelContext.executeTool(
+                        tool,
+                        JSON.stringify(input)
+                    );
+                } catch (err) {
+                    if (!(err instanceof TypeError)) throw err;
+                    result = await document.modelContext.executeTool(tool, input);
+                }
+                return typeof result === "string" ? JSON.parse(result) : result;
+            };
+        });
     },
 
     "Recipe access exposes explicit and accessible controls": browser => {
@@ -98,6 +100,76 @@ module.exports = {
             browser.assert.strictEqual(value.url, initialSessionState.url);
             browser.assert.deepStrictEqual(value.storageKeys, initialSessionState.storageKeys);
         });
+    },
+
+    "Recipe access resets on reload and remains page scoped": async browser => {
+        const originalHandle = await browser.window.getHandle();
+
+        await browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        const originalSession = await browser.execute(() =>
+            window.app.manager.webmcp.session.getState().state
+        );
+        browser.assert.strictEqual(originalSession, "active");
+
+        await browser.openNewWindow("tab");
+        const secondaryHandle = await browser.window.getHandle();
+        await browser.url(browser.launchUrl);
+        await browser.waitForElementNotPresent("#preloader", 10000);
+
+        const secondaryInitial = await browser.executeAsync(async done => {
+            try {
+                const tools = await document.modelContext.getTools();
+                done({
+                    sessionState: window.app.manager.webmcp.session.getState().state,
+                    toolNames: tools.map(tool => tool.name).sort(),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        });
+        browser.assert.strictEqual(secondaryInitial.scriptError, undefined);
+        browser.assert.strictEqual(secondaryInitial.sessionState, "off");
+        browser.assert.deepStrictEqual(secondaryInitial.toolNames, [
+            "apply_recipe_patch",
+            "bake_recipe",
+            "get_operation_details",
+            "get_recipe_state",
+            "inspect_output",
+            "search_operations",
+        ]);
+
+        await browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        const secondarySession = await browser.execute(() =>
+            window.app.manager.webmcp.session.getState().state
+        );
+        browser.assert.strictEqual(secondarySession, "active");
+
+        await browser.window.switchTo(originalHandle);
+        const originalAfterSecondaryStart = await browser.execute(() =>
+            window.app.manager.webmcp.session.getState().state
+        );
+        browser.assert.strictEqual(originalAfterSecondaryStart, "active");
+
+        await browser.window.switchTo(secondaryHandle);
+        await browser.closeWindow();
+        await browser.window.switchTo(originalHandle);
+        await browser.refresh();
+        await browser.waitForElementNotPresent("#preloader", 10000);
+
+        const refreshed = await browser.executeAsync(async done => {
+            try {
+                const tools = await document.modelContext.getTools();
+                done({
+                    sessionState: window.app.manager.webmcp.session.getState().state,
+                    toolNames: tools.map(tool => tool.name).sort(),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        });
+        browser.assert.strictEqual(refreshed.scriptError, undefined);
+        browser.assert.strictEqual(refreshed.sessionState, "off");
+        browser.assert.deepStrictEqual(refreshed.toolNames, secondaryInitial.toolNames);
     },
 
     "Recipe tools support a real discovery and collaboration flow": browser => {
