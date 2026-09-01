@@ -110,6 +110,8 @@ module.exports = {
         // Enter input
         browser
             .useCss()
+            .moveToElement("#input-text", 1, 1)
+            .waitForElementNotPresent(".popover-body", 1000)
             .sendKeys("#input-text .cm-content", "Don't Panic.")
             .pause(1000)
             .click("#bake");
