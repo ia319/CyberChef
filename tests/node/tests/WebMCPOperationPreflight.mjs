@@ -35,6 +35,7 @@ TestRegister.addApiTests([
     it("WebMCPOperationPreflight: should separate discovery, modification, and Bake permissions", () => {
         assert.deepStrictEqual(getOperationPermissions("To Base64"), {
             discoverable: true,
+            operationAccess: "direct",
             reviewStatus: "safe",
             supportedMutationActions: ALL_MUTATION_ACTIONS,
             agentBakeAllowed: true,
@@ -43,6 +44,7 @@ TestRegister.addApiTests([
         });
         assert.deepStrictEqual(getOperationPermissions("Generate HOTP"), {
             discoverable: true,
+            operationAccess: "approval",
             reviewStatus: "constrained",
             supportedMutationActions: ALL_MUTATION_ACTIONS,
             agentBakeAllowed: false,
@@ -51,14 +53,43 @@ TestRegister.addApiTests([
         });
         assert.deepStrictEqual(getOperationPermissions("HTTP request"), {
             discoverable: true,
+            operationAccess: "approval",
+            reviewStatus: "constrained",
+            supportedMutationActions: ALL_MUTATION_ACTIONS,
+            agentBakeAllowed: false,
+            mutationPolicy: "userActionRequired",
+            agentBakePolicy: "userActionRequired",
+        });
+        assert.deepStrictEqual(getOperationPermissions("Magic"), {
+            discoverable: true,
+            operationAccess: "blocked",
             reviewStatus: "denied",
             supportedMutationActions: REDUCTION_MUTATION_ACTIONS,
             agentBakeAllowed: false,
             mutationPolicy: "blocked",
             agentBakePolicy: "blocked",
         });
+        assert.deepStrictEqual(getOperationPermissions("Automated Validation Test Op"), {
+            discoverable: false,
+            operationAccess: "excluded",
+            reviewStatus: "unreviewed",
+            supportedMutationActions: [],
+            agentBakeAllowed: false,
+            mutationPolicy: "blocked",
+            agentBakePolicy: "blocked",
+        });
+        assert.deepStrictEqual(getOperationPermissions("Reverse"), {
+            discoverable: true,
+            operationAccess: "direct",
+            reviewStatus: "safe",
+            supportedMutationActions: ALL_MUTATION_ACTIONS,
+            agentBakeAllowed: true,
+            mutationPolicy: "allowed",
+            agentBakePolicy: "allowed",
+        });
         assert.deepStrictEqual(getOperationPermissions("SECRET_OPERATION_CANARY"), {
             discoverable: false,
+            operationAccess: "unreviewed",
             reviewStatus: null,
             supportedMutationActions: [],
             agentBakeAllowed: false,
@@ -252,6 +283,10 @@ TestRegister.addApiTests([
         );
         assert.deepStrictEqual(
             evaluateOperationMutation(MUTATION_ACTION.INSERT, "HTTP request", blockedPostflight),
+            {allowed: false, code: MUTATION_DECISION_CODE.RECIPE_BLOCKED}
+        );
+        assert.deepStrictEqual(
+            evaluateOperationMutation(MUTATION_ACTION.INSERT, "Magic", blockedPostflight),
             {allowed: false, code: MUTATION_DECISION_CODE.ACTION_BLOCKED}
         );
         for (const action of REDUCTION_MUTATION_ACTIONS) {

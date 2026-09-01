@@ -1,9 +1,9 @@
+import {OPERATION_ACCESS} from "./OperationAccessAudit.mjs";
 import {
     OPERATION_CAPABILITY_MANIFEST,
     OPERATION_POLICY,
     REVIEW_STATUS,
 } from "./OperationCapabilityManifest.mjs";
-import {getOperationProfile} from "./OperationProfiles.mjs";
 
 const MUTATION_ACTION = Object.freeze({
     INSERT: "insert",
@@ -38,10 +38,13 @@ const REDUCTION_MUTATION_ACTIONS = Object.freeze([
     MUTATION_ACTION.DISABLE,
 ]);
 
+const NO_MUTATION_ACTIONS = Object.freeze([]);
+
 const UNKNOWN_OPERATION_PERMISSIONS = Object.freeze({
     discoverable: false,
+    operationAccess: OPERATION_ACCESS.UNREVIEWED,
     reviewStatus: null,
-    supportedMutationActions: Object.freeze([]),
+    supportedMutationActions: NO_MUTATION_ACTIONS,
     agentBakeAllowed: false,
     mutationPolicy: OPERATION_POLICY.BLOCKED,
     agentBakePolicy: OPERATION_POLICY.BLOCKED,
@@ -49,20 +52,24 @@ const UNKNOWN_OPERATION_PERMISSIONS = Object.freeze({
 
 const PERMISSIONS_BY_NAME = new Map(OPERATION_CAPABILITY_MANIFEST.getOperationNames().map(operationName => {
     const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName),
-        profile = getOperationProfile(operationName),
-        standard = capability.reviewStatus === REVIEW_STATUS.SAFE && !!profile &&
-            capability.mutationPolicy === OPERATION_POLICY.ALLOWED,
-        approval = capability.reviewStatus === REVIEW_STATUS.CONSTRAINED && !!profile &&
-            capability.mutationPolicy === OPERATION_POLICY.USER_ACTION_REQUIRED &&
-            capability.agentBakePolicy === OPERATION_POLICY.USER_ACTION_REQUIRED,
+        access = capability.operationAccess,
+        direct = access === OPERATION_ACCESS.DIRECT,
+        approval = access === OPERATION_ACCESS.APPROVAL,
+        excluded = access === OPERATION_ACCESS.EXCLUDED,
+        mutationPolicy = direct ? OPERATION_POLICY.ALLOWED :
+            approval ? OPERATION_POLICY.USER_ACTION_REQUIRED : OPERATION_POLICY.BLOCKED,
+        agentBakePolicy = mutationPolicy,
+        reviewStatus = direct ? REVIEW_STATUS.SAFE : approval ? REVIEW_STATUS.CONSTRAINED :
+            access === OPERATION_ACCESS.BLOCKED ? REVIEW_STATUS.DENIED : REVIEW_STATUS.UNREVIEWED,
         permissions = Object.freeze({
-            discoverable: true,
-            reviewStatus: capability.reviewStatus,
-            supportedMutationActions: standard || approval ?
-                SAFE_MUTATION_ACTIONS : REDUCTION_MUTATION_ACTIONS,
-            agentBakeAllowed: standard && capability.agentBakePolicy === OPERATION_POLICY.ALLOWED,
-            mutationPolicy: capability.mutationPolicy,
-            agentBakePolicy: capability.agentBakePolicy,
+            discoverable: !excluded,
+            operationAccess: access,
+            reviewStatus,
+            supportedMutationActions: excluded ? NO_MUTATION_ACTIONS :
+                direct || approval ? SAFE_MUTATION_ACTIONS : REDUCTION_MUTATION_ACTIONS,
+            agentBakeAllowed: direct,
+            mutationPolicy,
+            agentBakePolicy,
         });
     return [operationName, permissions];
 }));
