@@ -167,6 +167,7 @@ TestRegister.addApiTests([
             "Normalise Unicode",
             "PEM to Hex",
             "ROT13",
+            "Swap endianness",
             "Text-Integer Conversion",
             "To Base32",
             "To Base45",
@@ -229,10 +230,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 57,
+            safe: 58,
             constrained: 1,
             denied: 9,
-            unreviewed: 437,
+            unreviewed: 436,
         });
     }),
 
