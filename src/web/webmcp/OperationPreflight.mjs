@@ -11,6 +11,7 @@ import {
 import {
     GOLDEN_RECIPE_RESOURCE_LIMITS,
     estimateOperationOutputBytes,
+    estimateOperationWorkBytes,
 } from "./OperationResourcePolicy.mjs";
 
 const OPERATION_PREFLIGHT_VERSION = "1";
@@ -213,8 +214,13 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
                 addIssue(PREFLIGHT_ISSUE_CODE.STEP_OUTPUT_LIMIT, stepIndex);
             }
 
+            const estimatedStepWorkBytes = estimateOperationWorkBytes(
+                profile.resourceLimits,
+                estimatedBytes,
+                estimatedOutputBytes
+            );
             estimatedBytes = estimatedOutputBytes;
-            estimatedWorkBytes += estimatedOutputBytes;
+            estimatedWorkBytes += estimatedStepWorkBytes;
             if (!Number.isSafeInteger(estimatedWorkBytes) ||
                 estimatedWorkBytes > GOLDEN_RECIPE_RESOURCE_LIMITS.maxEstimatedWorkBytes) {
                 resourceAllowed = false;

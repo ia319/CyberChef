@@ -268,6 +268,9 @@ function applyIngredientProfile(mappedIngredient, rule, defaultValue) {
             expandedSymbolCount: rule.symbolCount,
             uniqueExpandedSymbols: true,
             printableAscii: true,
+            requiredPrefix: rule.requiredPrefix,
+            requiredSuffix: rule.requiredSuffix,
+            excludedSymbols: rule.excludedSymbols,
         };
         optionItems = rule.presets.map((value, sourceOptionIndex) => Object.freeze({
             argumentIndex: mappedIngredient.descriptor.argumentIndex,

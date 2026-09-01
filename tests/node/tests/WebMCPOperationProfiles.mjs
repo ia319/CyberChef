@@ -24,7 +24,9 @@ import {
     stringRule,
 } from "../../../src/web/webmcp/OperationProfileRules.mjs";
 import {
+    boundedSuperlinearResourceLimits,
     estimateOperationOutputBytes,
+    estimateOperationWorkBytes,
     linearResourceLimits,
 } from "../../../src/web/webmcp/OperationResourcePolicy.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
@@ -66,6 +68,7 @@ TestRegister.addApiTests([
             assert.equal(profile.defaultArguments.length, profile.argumentRules.length);
             assert.equal(profile.resourceLimits.complexity, "linear");
             assert.equal(profile.resourceLimits.baseOutputBytes, 0);
+            assert.equal(profile.resourceLimits.workFactor, 1);
             assert(profile.resourceLimits.maxExpansionRatio >= 1);
             assert(profile.resourceLimits.maxInputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes);
             assert(profile.resourceLimits.maxOutputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes);
@@ -148,28 +151,39 @@ TestRegister.addApiTests([
     }),
 
     it("WebMCPOperationProfiles: should enforce alphabet and cross-argument rules", () => {
-        const profile = defineOperationProfile({
-            operationName: "From Base85",
-            argumentRules: [
-                alphabetRule(85, ["!-u"]),
-                booleanRule(),
-                stringRule(0, 1, 0x20, 0x7e),
-            ],
-            defaultArguments: ["!-u", true, "z"],
-            argumentRelations: [notInAlphabetRelation(2, 0)],
-            sensitiveArgumentIndexes: [],
-            resourceLimits: linearResourceLimits(1),
-            evidence: ["src/core/operations/FromBase85.mjs"],
-            reviewedOn: "2026-09-01",
-        });
+        const profileConfig = {
+                operationName: "From Base85",
+                argumentRules: [
+                    alphabetRule(85, ["!-u"]),
+                    booleanRule(),
+                    stringRule(0, 1, 0x20, 0x7e),
+                ],
+                defaultArguments: ["!-u", true, "z"],
+                argumentRelations: [notInAlphabetRelation(2, 0)],
+                sensitiveArgumentIndexes: [],
+                resourceLimits: linearResourceLimits(1),
+                evidence: ["src/core/operations/FromBase85.mjs"],
+                reviewedOn: "2026-09-01",
+            },
+            profile = defineOperationProfile(profileConfig),
+            boundedProfile = defineOperationProfile({
+                ...profileConfig,
+                argumentRules: [
+                    alphabetRule(85, ["!-u"], 256, "!", "u"),
+                    booleanRule(),
+                    stringRule(0, 1, 0x20, 0x7e),
+                ],
+            });
 
         assert.equal(resolveOperationProfileArguments(profile).valid, true);
         assert.equal(resolveOperationProfileArguments(profile, ["!-t", true, "z"]).valid, false);
+        assert.equal(resolveOperationProfileArguments(boundedProfile, ["#-w", true, "z"]).valid, false);
         assert.deepStrictEqual(resolveOperationProfileArguments(profile, ["!-tz", true, "z"]), {
             valid: false,
             code: PROFILE_VALIDATION_CODE.ARGUMENT_RELATION,
         });
         assert.equal(resolveOperationProfileArguments(profile, ["!-u", true, "😀"]).valid, false);
+        assert.throws(() => alphabetRule(85, ["!-u"], 256, "!", "u", "A"), RangeError);
     }),
 
     it("WebMCPOperationProfiles: should enforce finite dependent rules", () => {
@@ -196,6 +210,12 @@ TestRegister.addApiTests([
         assert.equal(resolveOperationProfileArguments(profile, [
             "bc", "Bech32", "Raw bytes", "Generic", 1,
         ]).valid, false);
+        assert.throws(() => conditionalRule(
+            3,
+            "Bitcoin SegWit",
+            integerRule(0, 16),
+            constantRule("0")
+        ), TypeError);
         assert.deepStrictEqual(profile.sensitiveArgumentIndexes, [0]);
         assert.equal(Object.isFrozen(profile.sensitiveArgumentIndexes), true);
     }),
@@ -232,5 +252,9 @@ TestRegister.addApiTests([
         assert.equal(estimateOperationOutputBytes(limits, 20), 56);
         assert.equal(estimateOperationOutputBytes(limits, Number.MAX_SAFE_INTEGER),
             GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes + 1);
+        assert.equal(estimateOperationWorkBytes(limits, 20, 56), 56);
+
+        const superlinear = boundedSuperlinearResourceLimits(2, 64, 1024);
+        assert.equal(estimateOperationWorkBytes(superlinear, 1024, 2048), 128 * 1024);
     }),
 ]);

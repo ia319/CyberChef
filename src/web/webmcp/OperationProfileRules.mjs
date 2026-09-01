@@ -60,6 +60,7 @@ function isProfilePrimitive(value) {
 function enumRule(values) {
     if (!Array.isArray(values) || values.length < 1 ||
         values.some(value => !isProfilePrimitive(value)) ||
+        values.some(value => typeof value !== typeof values[0]) ||
         new Set(values).size !== values.length) {
         throw new TypeError("Profile enum values must be unique JSON primitives");
     }
@@ -133,6 +134,7 @@ function stringRule(
 ) {
     if (!Number.isSafeInteger(minimumCodePoints) || !Number.isSafeInteger(maximumCodePoints) ||
         minimumCodePoints < 0 || minimumCodePoints > maximumCodePoints ||
+        maximumCodePoints > 16 * 1024 ||
         !Number.isSafeInteger(minimumCharacterCodePoint) ||
         !Number.isSafeInteger(maximumCharacterCodePoint) ||
         minimumCharacterCodePoint < 0 || maximumCharacterCodePoint > 0x10ffff ||
@@ -155,21 +157,42 @@ function stringRule(
  * @param {number} symbolCount - Required number of unique expanded symbols.
  * @param {string[]} [presets=[]] - Audited suggested expressions.
  * @param {number} [maximumExpressionCodePoints=256] - Maximum compact expression length.
+ * @param {string} [requiredPrefix=""] - Required expanded alphabet prefix.
+ * @param {string} [requiredSuffix=""] - Required expanded alphabet suffix.
+ * @param {string} [excludedSymbols=""] - Expanded symbols that are not accepted.
  * @returns {Object} Immutable argument rule.
  */
-function alphabetRule(symbolCount, presets=[], maximumExpressionCodePoints=256) {
+function alphabetRule(
+    symbolCount,
+    presets=[],
+    maximumExpressionCodePoints=256,
+    requiredPrefix="",
+    requiredSuffix="",
+    excludedSymbols=""
+) {
     if (!Number.isSafeInteger(symbolCount) || symbolCount < 1 || symbolCount > 256 ||
         !Number.isSafeInteger(maximumExpressionCodePoints) || maximumExpressionCodePoints < 1 ||
         maximumExpressionCodePoints > 256 || !Array.isArray(presets) ||
-        presets.some(value => typeof value !== "string") || new Set(presets).size !== presets.length) {
+        presets.some(value => typeof value !== "string") || new Set(presets).size !== presets.length ||
+        typeof requiredPrefix !== "string" || typeof requiredSuffix !== "string" ||
+        typeof excludedSymbols !== "string" ||
+        [requiredPrefix, requiredSuffix, excludedSymbols].some(value =>
+            [...value].some(character => character.codePointAt(0) < 0x20 || character.codePointAt(0) > 0x7e))) {
         throw new RangeError("Profile alphabet constraints are invalid");
     }
-    return Object.freeze({
+    const rule = Object.freeze({
         type: PROFILE_ARGUMENT_RULE.ALPHABET,
         symbolCount,
         maximumExpressionCodePoints,
         presets: Object.freeze([...presets]),
+        requiredPrefix,
+        requiredSuffix,
+        excludedSymbols,
     });
+    if (presets.some(value => expandProfileAlphabet(value, rule) === null)) {
+        throw new RangeError("Profile alphabet preset does not satisfy its constraints");
+    }
+    return rule;
 }
 
 
@@ -184,7 +207,8 @@ function alphabetRule(symbolCount, presets=[], maximumExpressionCodePoints=256) 
  */
 function conditionalRule(argumentIndex, value, matchedRule, unmatchedRule) {
     if (!Number.isSafeInteger(argumentIndex) || argumentIndex < 0 || !isProfilePrimitive(value) ||
-        !isOperationProfileRule(matchedRule) || !isOperationProfileRule(unmatchedRule)) {
+        !isOperationProfileRule(matchedRule) || !isOperationProfileRule(unmatchedRule) ||
+        operationProfileRuleValueType(matchedRule) !== operationProfileRuleValueType(unmatchedRule)) {
         throw new TypeError("Profile conditional rule is invalid");
     }
     return Object.freeze({
@@ -237,6 +261,7 @@ function isOperationProfileRule(rule, depth=0) {
     if (rule.type === PROFILE_ARGUMENT_RULE.ENUM) {
         return hasExactDataProperties(rule, ["type", "values"]) && Array.isArray(rule.values) &&
             rule.values.length > 0 && rule.values.every(isProfilePrimitive) &&
+            rule.values.every(value => typeof value === typeof rule.values[0]) &&
             new Set(rule.values).size === rule.values.length;
     }
     if (rule.type === PROFILE_ARGUMENT_RULE.INTEGER) {
@@ -250,26 +275,55 @@ function isOperationProfileRule(rule, depth=0) {
             "minimumCharacterCodePoint", "maximumCharacterCodePoint",
         ]) && Number.isSafeInteger(rule.minimumCodePoints) &&
             Number.isSafeInteger(rule.maximumCodePoints) && rule.minimumCodePoints >= 0 &&
-            rule.minimumCodePoints <= rule.maximumCodePoints &&
+            rule.minimumCodePoints <= rule.maximumCodePoints && rule.maximumCodePoints <= 16 * 1024 &&
             Number.isSafeInteger(rule.minimumCharacterCodePoint) &&
             Number.isSafeInteger(rule.maximumCharacterCodePoint) &&
             rule.minimumCharacterCodePoint >= 0 && rule.maximumCharacterCodePoint <= 0x10ffff &&
             rule.minimumCharacterCodePoint <= rule.maximumCharacterCodePoint;
     }
     if (rule.type === PROFILE_ARGUMENT_RULE.ALPHABET) {
-        return hasExactDataProperties(rule, [
+        const valid = hasExactDataProperties(rule, [
             "type", "symbolCount", "maximumExpressionCodePoints", "presets",
+            "requiredPrefix", "requiredSuffix", "excludedSymbols",
         ]) && Number.isSafeInteger(rule.symbolCount) && rule.symbolCount > 0 &&
             rule.symbolCount <= 256 && Number.isSafeInteger(rule.maximumExpressionCodePoints) &&
             rule.maximumExpressionCodePoints > 0 && rule.maximumExpressionCodePoints <= 256 &&
             Array.isArray(rule.presets) && rule.presets.every(value => typeof value === "string") &&
-            new Set(rule.presets).size === rule.presets.length;
+            new Set(rule.presets).size === rule.presets.length &&
+            typeof rule.requiredPrefix === "string" && typeof rule.requiredSuffix === "string" &&
+            typeof rule.excludedSymbols === "string" &&
+            [rule.requiredPrefix, rule.requiredSuffix, rule.excludedSymbols].every(value =>
+                [...value].every(character => {
+                    const codePoint = character.codePointAt(0);
+                    return codePoint >= 0x20 && codePoint <= 0x7e;
+                }));
+        return valid && rule.presets.every(value => expandProfileAlphabet(value, rule) !== null);
     }
-    return hasExactDataProperties(rule, [
+    const valid = hasExactDataProperties(rule, [
         "type", "argumentIndex", "value", "matchedRule", "unmatchedRule",
     ]) && Number.isSafeInteger(rule.argumentIndex) && rule.argumentIndex >= 0 &&
         isProfilePrimitive(rule.value) && isOperationProfileRule(rule.matchedRule, depth + 1) &&
         isOperationProfileRule(rule.unmatchedRule, depth + 1);
+    return valid && operationProfileRuleValueType(rule.matchedRule) ===
+        operationProfileRuleValueType(rule.unmatchedRule);
+}
+
+
+/**
+ * Returns the primitive value type owned by one validated argument rule.
+ *
+ * @param {Object} rule - Validated profile rule.
+ * @returns {string} JavaScript primitive type name.
+ */
+function operationProfileRuleValueType(rule) {
+    if (rule.type === PROFILE_ARGUMENT_RULE.BOOLEAN) return "boolean";
+    if (rule.type === PROFILE_ARGUMENT_RULE.INTEGER) return "number";
+    if (rule.type === PROFILE_ARGUMENT_RULE.CONSTANT) return typeof rule.value;
+    if (rule.type === PROFILE_ARGUMENT_RULE.ENUM) return typeof rule.values[0];
+    if (rule.type === PROFILE_ARGUMENT_RULE.CONDITIONAL) {
+        return operationProfileRuleValueType(rule.matchedRule);
+    }
+    return "string";
 }
 
 
@@ -304,8 +358,11 @@ function expandProfileAlphabet(value, rule) {
         })) {
         return null;
     }
-    const symbols = Utils.expandAlphRange(value);
-    return symbols.length === rule.symbolCount && new Set(symbols).size === symbols.length ? symbols : null;
+    const symbols = Utils.expandAlphRange(value),
+        alphabet = symbols.join("");
+    return symbols.length === rule.symbolCount && new Set(symbols).size === symbols.length &&
+        alphabet.startsWith(rule.requiredPrefix) && alphabet.endsWith(rule.requiredSuffix) &&
+        !symbols.some(symbol => rule.excludedSymbols.includes(symbol)) ? symbols : null;
 }
 
 

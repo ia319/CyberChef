@@ -18,18 +18,20 @@ function isOperationResourceLimits(value) {
         descriptors = Object.getOwnPropertyDescriptors(value),
         properties = [
             "complexity", "maxInputBytes", "maxOutputBytes",
-            "maxExpansionRatio", "baseOutputBytes",
+            "maxExpansionRatio", "baseOutputBytes", "workFactor",
         ],
         keys = Reflect.ownKeys(descriptors);
     return (prototype === Object.prototype || prototype === null) &&
         keys.length === properties.length && keys.every(key => typeof key === "string" &&
             properties.includes(key) && descriptors[key].enumerable && "value" in descriptors[key]) &&
-        value.complexity === "linear" && Number.isFinite(value.maxExpansionRatio) &&
+        ["linear", "superlinear"].includes(value.complexity) &&
+        Number.isFinite(value.maxExpansionRatio) &&
         value.maxExpansionRatio >= 0 && Number.isSafeInteger(value.baseOutputBytes) &&
         value.baseOutputBytes >= 0 && Number.isSafeInteger(value.maxInputBytes) &&
         value.maxInputBytes >= 0 && value.maxInputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes &&
         Number.isSafeInteger(value.maxOutputBytes) && value.maxOutputBytes >= 0 &&
-        value.maxOutputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes;
+        value.maxOutputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes &&
+        Number.isSafeInteger(value.workFactor) && value.workFactor >= 1 && value.workFactor <= 1024;
 }
 
 
@@ -62,6 +64,41 @@ function linearResourceLimits(
         maxOutputBytes,
         maxExpansionRatio,
         baseOutputBytes,
+        workFactor: 1,
+    });
+}
+
+
+/**
+ * Defines a hard input cap and conservative work factor for a superlinear Operation.
+ *
+ * @param {number} maxExpansionRatio - Conservative output-to-input byte ratio.
+ * @param {number} workFactor - Relative work multiplier applied to materialized bytes.
+ * @param {number} maxInputBytes - Hard input cap established by review evidence.
+ * @param {number} [baseOutputBytes=0] - Fixed output overhead.
+ * @param {number} [maxOutputBytes] - Maximum materialized output bytes.
+ * @returns {Object} Immutable resource limits.
+ */
+function boundedSuperlinearResourceLimits(
+    maxExpansionRatio,
+    workFactor,
+    maxInputBytes,
+    baseOutputBytes=0,
+    maxOutputBytes=GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes
+) {
+    const linear = linearResourceLimits(
+        maxExpansionRatio,
+        baseOutputBytes,
+        maxInputBytes,
+        maxOutputBytes
+    );
+    if (!Number.isSafeInteger(workFactor) || workFactor < 2 || workFactor > 1024) {
+        throw new RangeError("Operation work factor is invalid");
+    }
+    return Object.freeze({
+        ...linear,
+        complexity: "superlinear",
+        workFactor,
     });
 }
 
@@ -80,9 +117,26 @@ function estimateOperationOutputBytes(resourceLimits, inputBytes) {
     return Number.isSafeInteger(estimate) ? Math.min(estimate, overflow) : overflow;
 }
 
+
+/**
+ * Estimates cumulative work from the larger materialized side of one step.
+ *
+ * @param {Object} resourceLimits - Reviewed Operation resource limits.
+ * @param {number} inputBytes - Estimated step input bytes.
+ * @param {number} outputBytes - Estimated step output bytes.
+ * @returns {number} Estimated work bytes or one byte above the global limit.
+ */
+function estimateOperationWorkBytes(resourceLimits, inputBytes, outputBytes) {
+    const overflow = GOLDEN_RECIPE_RESOURCE_LIMITS.maxEstimatedWorkBytes + 1,
+        estimate = Math.ceil(Math.max(inputBytes, outputBytes) * resourceLimits.workFactor);
+    return Number.isSafeInteger(estimate) ? Math.min(estimate, overflow) : overflow;
+}
+
 export {
     GOLDEN_RECIPE_RESOURCE_LIMITS,
+    boundedSuperlinearResourceLimits,
     estimateOperationOutputBytes,
+    estimateOperationWorkBytes,
     isOperationResourceLimits,
     linearResourceLimits,
 };
