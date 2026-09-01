@@ -157,7 +157,9 @@ TestRegister.addApiTests([
             "From Hex",
             "From Hexdump",
             "From Octal",
+            "Normalise Unicode",
             "ROT13",
+            "Text-Integer Conversion",
             "To Base32",
             "To Base45",
             "To Base58",
@@ -215,10 +217,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 43,
+            safe: 45,
             constrained: 1,
             denied: 9,
-            unreviewed: 451,
+            unreviewed: 449,
         });
     }),
 
