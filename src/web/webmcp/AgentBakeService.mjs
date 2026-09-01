@@ -39,10 +39,12 @@ function throwIfAborted(signal) {
  * Maps a blocked complete-Recipe preflight to a stable public policy error.
  *
  * @param {Object} preflight - Complete local Recipe preflight result.
+ * @param {boolean} [userApproval=false] - Whether one-use approval may satisfy policy.
  * @returns {string|null} Fixed Agent Bake error code or null when allowed.
  */
-function getPreflightErrorCode(preflight) {
-    if (preflight?.agentBakeAllowed === true) return null;
+function getPreflightErrorCode(preflight, userApproval=false) {
+    if (preflight?.agentBakeAllowed === true ||
+        userApproval && preflight?.approvalBakeAllowed === true) return null;
     return preflight?.issues?.some(issue => UNREVIEWED_ISSUE_CODES.has(issue.code)) ?
         AGENT_BAKE_ERROR_CODE.UNREVIEWED_OPERATION : AGENT_BAKE_ERROR_CODE.RISK_BLOCKED;
 }
@@ -85,6 +87,7 @@ function getTerminalStepId(projection, terminalState, progress) {
 class AgentBakeService {
     #app;
     #manager;
+    #preparedBakes;
 
     /**
      * @param {Object} app - CyberChef application state.
@@ -113,6 +116,7 @@ class AgentBakeService {
         }
         this.#app = app;
         this.#manager = manager;
+        this.#preparedBakes = new WeakMap();
     }
 
     /**
@@ -185,17 +189,19 @@ class AgentBakeService {
     }
 
     /**
-     * Reuses, joins or starts one exact active-Input Run and verifies its visible provenance.
+     * Validates and captures one active Bake target without starting Worker work.
      *
      * @param {number} expectedRevision - Recipe revision authorized by the Agent.
      * @param {AbortSignal|null} [signal=null] - Invocation and Session cancellation signal.
-     * @returns {Promise<Object>} Settled content-free Agent Bake result.
-     * @throws {AgentBakeError} When policy, target or scheduling prevents the Run.
+     * @param {boolean} [userApproval=false] - Whether a one-use approval may satisfy policy.
+     * @returns {Promise<Object>} One-use prepared Bake and exact content-free target.
+     * @throws {AgentBakeError} When policy or target validation prevents the Run.
      */
-    async ensureActiveBake(expectedRevision, signal=null) {
+    async prepareActiveBake(expectedRevision, signal=null, userApproval=false) {
         if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
             throw new TypeError("Expected Recipe revision is invalid");
         }
+        if (typeof userApproval !== "boolean") throw new TypeError("Bake approval mode is invalid");
         throwIfAborted(signal);
         if (this.#manager.recipe.getRecipeRevision() !== expectedRevision) {
             throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_RECIPE);
@@ -213,7 +219,7 @@ class AgentBakeService {
                 createPreflightRecipe(recipeConfig),
                 inputState.inputByteLength
             ),
-            preflightErrorCode = getPreflightErrorCode(preflight);
+            preflightErrorCode = getPreflightErrorCode(preflight, userApproval);
         if (projection.recipeRevision !== expectedRevision) {
             throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_RECIPE);
         }
@@ -250,6 +256,29 @@ class AgentBakeService {
             throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);
         }
         throwIfAborted(signal);
+
+        const preparedBake = Object.freeze({target});
+        this.#preparedBakes.set(preparedBake, target);
+        return preparedBake;
+    }
+
+
+    /**
+     * Starts one prepared active-Input Run exactly once and verifies visible provenance.
+     *
+     * @param {Object} preparedBake - One-use value returned by prepareActiveBake().
+     * @param {AbortSignal|null} [signal=null] - Invocation, Session, and approval signal.
+     * @returns {Promise<Object>} Settled content-free Agent Bake result.
+     * @throws {AgentBakeError} When target or scheduling prevents the Run.
+     */
+    async commitPreparedBake(preparedBake, signal=null) {
+        const target = this.#preparedBakes.get(preparedBake);
+        if (!target) throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);
+        this.#preparedBakes.delete(preparedBake);
+        throwIfAborted(signal);
+        if (!this.#targetIsCurrent(target)) {
+            throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);
+        }
 
         const request = this.#manager.worker.bakeAgentTarget(target, signal);
         if (!request) throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);
@@ -295,7 +324,7 @@ class AgentBakeService {
         }
 
         const currentProjection = this.#manager.recipe.getReadProjection();
-        if (currentProjection.recipeRevision !== expectedRevision) {
+        if (currentProjection.recipeRevision !== target.recipeRevisionAtStart) {
             throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT);
         }
         return Object.freeze({
@@ -310,6 +339,20 @@ class AgentBakeService {
             target: boundTarget,
             provenance,
         });
+    }
+
+
+    /**
+     * Reuses, joins or starts one exact active-Input Run and verifies its visible provenance.
+     *
+     * @param {number} expectedRevision - Recipe revision authorized by the Agent.
+     * @param {AbortSignal|null} [signal=null] - Invocation and Session cancellation signal.
+     * @returns {Promise<Object>} Settled content-free Agent Bake result.
+     * @throws {AgentBakeError} When policy, target or scheduling prevents the Run.
+     */
+    async ensureActiveBake(expectedRevision, signal=null) {
+        const preparedBake = await this.prepareActiveBake(expectedRevision, signal);
+        return this.commitPreparedBake(preparedBake, signal);
     }
 
     /**

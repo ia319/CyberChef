@@ -182,6 +182,26 @@ TestRegister.addApiTests([
         });
     }),
 
+    it("WebMCPAgentBakeService: should prepare without starting Worker work", async () => {
+        const {service, evidence} = createFixture(),
+            prepared = await service.prepareActiveBake(7);
+
+        assert.equal(prepared.target.recipeRevisionAtStart, 7);
+        assert.equal(prepared.target.inputTargets[0].inputRevision, 2);
+        assert.equal(evidence.flushCount, 1);
+        assert.equal(evidence.workerCount, 0);
+
+        const result = await service.commitPreparedBake(prepared);
+        assert.equal(result.terminalState, RUN_STATE.COMPLETED);
+        assert.equal(evidence.workerCount, 1);
+        await assert.rejects(
+            service.commitPreparedBake(prepared),
+            error => error instanceof AgentBakeError &&
+                error.code === AGENT_BAKE_ERROR_CODE.STALE_BAKE_RESULT
+        );
+        assert.equal(evidence.workerCount, 1);
+    }),
+
     it("WebMCPAgentBakeService: should reuse, join, and start exact active targets", async () => {
         for (const decision of [
             RUN_DECISION.ALREADY_FRESH,
