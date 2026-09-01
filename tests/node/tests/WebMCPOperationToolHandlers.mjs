@@ -83,6 +83,42 @@ TestRegister.addApiTests([
         assert(JSON.stringify(result).length <= TOOL_RESULT_MAX_CHARS);
     }),
 
+    it("WebMCPOperationToolHandlers: should expose reviewed data-format constraints", async () => {
+        const contract = TOOL_CONTRACTS[TOOL_NAME.GET_OPERATION_DETAILS],
+            handler = OPERATION_TOOL_HANDLERS[TOOL_NAME.GET_OPERATION_DETAILS],
+            result = await executeTool(contract, handler, {
+                name: "To Bech32",
+                argumentOffset: 0,
+                argumentLimit: 1,
+                optionOffset: 0,
+                optionLimit: 1,
+            }),
+            encoding = await executeTool(contract, handler, {
+                name: "To Bech32",
+                argumentOffset: 1,
+                argumentLimit: 1,
+                optionOffset: 0,
+                optionLimit: 1,
+            }),
+            witness = await executeTool(contract, handler, {
+                name: "To Bech32",
+                argumentOffset: 4,
+                argumentLimit: 1,
+                optionOffset: 0,
+                optionLimit: 1,
+            });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.data.reviewStatus, "safe");
+        assert.equal(result.data.agentBakeAllowed, true);
+        assert(result.data.supportedActions.includes("insert"));
+        assert.equal(result.data.arguments[0].constraints.profileRule, "string");
+        assert.equal(encoding.data.arguments[0].index, 1);
+        assert.equal(encoding.data.arguments[0].constraints.profileRule, "conditional");
+        assert.equal(witness.data.arguments[0].index, 4);
+        assert.equal(witness.data.arguments[0].constraints.profileRule, "conditional");
+    }),
+
     it("WebMCPOperationToolHandlers: should paginate large argument sets within the result budget", async () => {
         const result = await executeTool(
             TOOL_CONTRACTS[TOOL_NAME.GET_OPERATION_DETAILS],

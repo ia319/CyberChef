@@ -7,6 +7,7 @@ import {
     createOperationCapabilityManifest,
 } from "../../../src/web/webmcp/OperationCapabilityManifest.mjs";
 import { OPERATION_CATALOG, createOperationCatalog } from "../../../src/web/webmcp/OperationCatalog.mjs";
+import { linearResourceLimits } from "../../../src/web/webmcp/OperationResourcePolicy.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
@@ -95,7 +96,7 @@ TestRegister.addApiTests([
                 evidence: [],
                 reviewedOn: "2026-08-30",
                 sensitiveArguments: [],
-                resourceLimits: {},
+                resourceLimits: linearResourceLimits(1),
                 mutationPolicy: OPERATION_POLICY.ALLOWED,
                 agentBakePolicy: OPERATION_POLICY.ALLOWED,
             },
@@ -127,16 +128,30 @@ TestRegister.addApiTests([
         }
     }),
 
-    it("WebMCPOperationCapabilityManifest: should allow only profiled Golden Operations", () => {
+    it("WebMCPOperationCapabilityManifest: should allow only profiled Operations", () => {
         const safeOperations = OPERATION_CAPABILITY_MANIFEST.getOperationNames().filter(operationName =>
             OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName).reviewStatus === REVIEW_STATUS.SAFE
         );
 
         assert.deepStrictEqual(safeOperations, [
+            "From Base32",
+            "From Base45",
+            "From Base58",
+            "From Base62",
             "From Base64",
+            "From Base85",
+            "From Bech32",
+            "From Binary",
             "From Hex",
             "ROT13",
+            "To Base32",
+            "To Base45",
+            "To Base58",
+            "To Base62",
             "To Base64",
+            "To Base85",
+            "To Bech32",
+            "To Binary",
             "To Hex",
             "URL Decode",
             "URL Encode",
@@ -148,6 +163,20 @@ TestRegister.addApiTests([
             assert(capability.resourceLimits, operationName);
             for (const field of CAPABILITY_FIELDS) assert.equal(capability[field], false, `${operationName}: ${field}`);
         }
+    }),
+
+    it("WebMCPOperationCapabilityManifest: should preserve explicit review counts", () => {
+        const counts = Object.fromEntries(Object.values(REVIEW_STATUS).map(status => [status, 0]));
+        for (const operationName of OPERATION_CAPABILITY_MANIFEST.getOperationNames()) {
+            counts[OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName).reviewStatus]++;
+        }
+
+        assert.deepStrictEqual(counts, {
+            safe: 21,
+            constrained: 0,
+            denied: 9,
+            unreviewed: 474,
+        });
     }),
 
     it("WebMCPOperationCapabilityManifest: should default new and prototype-like names to unreviewed", () => {

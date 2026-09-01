@@ -15,11 +15,13 @@ TestRegister.addApiTests([
     it("WebMCPAgentRecipePatchPolicy: should supply reviewed insert defaults", () => {
         const changes = prepareAgentRecipeChanges([
             {type: "insert", operation: "To Hex"},
+            {type: "insert", operation: "To Base32"},
             {type: "disable", stepId: "recipe-step-1"},
         ]);
 
         assert.deepStrictEqual(changes, [
             {type: "insert", operation: "To Hex", arguments: ["Space", 0]},
+            {type: "insert", operation: "To Base32", arguments: ["A-Z2-7="]},
             {type: "disable", stepId: "recipe-step-1"},
         ]);
     }),

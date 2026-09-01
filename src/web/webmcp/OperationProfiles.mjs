@@ -1,4 +1,5 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
+import { DATA_FORMAT_OPERATION_PROFILE_CONFIGS } from "./DataFormatOperationProfiles.mjs";
 import {
     PROFILE_VALIDATION_CODE,
     resolveOperationProfileArguments,
@@ -230,8 +231,16 @@ const GOLDEN_OPERATION_PROFILES = Object.freeze([
     }),
 ]);
 
-const PROFILES_BY_NAME = new Map(GOLDEN_OPERATION_PROFILES.map(profile => [profile.operationName, profile]));
-if (PROFILES_BY_NAME.size !== GOLDEN_OPERATION_PROFILES.length) {
+const DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
+    DATA_FORMAT_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
+);
+const OPERATION_PROFILES = Object.freeze([
+    ...GOLDEN_OPERATION_PROFILES,
+    ...DATA_FORMAT_OPERATION_PROFILES,
+]);
+
+const PROFILES_BY_NAME = new Map(OPERATION_PROFILES.map(profile => [profile.operationName, profile]));
+if (PROFILES_BY_NAME.size !== OPERATION_PROFILES.length) {
     throw new RangeError("Operation profiles contain a duplicate name");
 }
 
@@ -249,10 +258,12 @@ function getOperationProfile(operationName) {
 
 export {
     BASE64_ALPHABETS,
+    DATA_FORMAT_OPERATION_PROFILES,
     FROM_HEX_DELIMITERS,
     GOLDEN_OPERATION_PROFILES,
     GOLDEN_RECIPE_RESOURCE_LIMITS,
     OPERATION_PROFILE_VERSION,
+    OPERATION_PROFILES,
     PROFILE_ARGUMENT_RULE,
     PROFILE_VALIDATION_CODE,
     TO_HEX_DELIMITERS,

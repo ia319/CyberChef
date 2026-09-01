@@ -1,5 +1,6 @@
 import { OPERATION_CATALOG } from "./OperationCatalog.mjs";
-import { GOLDEN_OPERATION_PROFILES } from "./OperationProfiles.mjs";
+import { OPERATION_PROFILES } from "./OperationProfiles.mjs";
+import { isOperationResourceLimits } from "./OperationResourcePolicy.mjs";
 
 const REVIEW_STATUS = Object.freeze({
     SAFE: "safe",
@@ -85,7 +86,7 @@ function allowedPolicy(profile) {
         riskCodes: Object.freeze([]),
         evidence: profile.evidence,
         reviewedOn: profile.reviewedOn,
-        sensitiveArguments: Object.freeze([]),
+        sensitiveArguments: profile.sensitiveArgumentIndexes,
         resourceLimits: profile.resourceLimits,
         mutationPolicy: OPERATION_POLICY.ALLOWED,
         agentBakePolicy: OPERATION_POLICY.ALLOWED,
@@ -175,7 +176,7 @@ const KNOWN_RISK_OPERATION_POLICIES = Object.freeze([
 const REVIEWED_OPERATION_POLICIES = Object.freeze([
     ...DENIED_OPERATION_POLICIES,
     ...KNOWN_RISK_OPERATION_POLICIES,
-    ...GOLDEN_OPERATION_PROFILES.map(allowedPolicy),
+    ...OPERATION_PROFILES.map(allowedPolicy),
 ]);
 
 
@@ -201,8 +202,7 @@ function createOperationCapabilityManifest(
             typeof policy.capabilities !== "object" || Array.isArray(policy.capabilities) ||
             !Array.isArray(policy.riskCodes) || !Array.isArray(policy.evidence) ||
             !(policy.sensitiveArguments === null || Array.isArray(policy.sensitiveArguments)) ||
-            !(policy.resourceLimits === null || typeof policy.resourceLimits === "object" &&
-                !Array.isArray(policy.resourceLimits)) ||
+            !(policy.resourceLimits === null || isOperationResourceLimits(policy.resourceLimits)) ||
             !Object.values(OPERATION_POLICY).includes(policy.mutationPolicy) ||
             !Object.values(OPERATION_POLICY).includes(policy.agentBakePolicy) ||
             policy.riskCodes.some(code => typeof code !== "string") ||

@@ -58,6 +58,7 @@ import "./tests/WebMCPInspectOutputToolHandlers.mjs";
 import "./tests/WebMCPOperationCapabilityManifest.mjs";
 import "./tests/WebMCPOperationIngredients.mjs";
 import "./tests/WebMCPOperationProfiles.mjs";
+import "./tests/WebMCPDataFormatOperationProfiles.mjs";
 import "./tests/WebMCPOperationPreflight.mjs";
 import "./tests/WebMCPToolExecutor.mjs";
 import "./tests/WebMCPToolInput.mjs";
