@@ -53,19 +53,29 @@ jobs:
         run: |
           npx @puppeteer/browsers install chrome@152
           chrome_binary="$(find "$GITHUB_WORKSPACE/chrome" -type f -name chrome -print -quit)"
-          chrome_sandbox="/opt/google/chrome/chrome-sandbox"
           test -x "$chrome_binary"
-          test -x "$chrome_sandbox"
-          test -u "$chrome_sandbox"
-          test "$(stat -c %u "$chrome_sandbox")" -eq 0
           echo "chrome-binary=$chrome_binary" >> "$GITHUB_OUTPUT"
-          echo "chrome-sandbox=$chrome_sandbox" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Chrome Sandbox
+        if: success()
+        env:
+          CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
+        run: |
+          profile_path="/etc/apparmor.d/cyberchef-chrome-for-testing"
+          cat <<EOF | sudo tee "$profile_path" > /dev/null
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile cyberchef-chrome-for-testing "$CYBERCHEF_TEST_CHROME_BINARY" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo apparmor_parser -r "$profile_path"
 
       - name: UI Tests
         if: success()
         env:
           CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
-          CHROME_DEVEL_SANDBOX: ${{ steps.setup-chrome.outputs.chrome-sandbox }}
         run: |
           sudo apt-get install xvfb
           xvfb-run --server-args="-screen 0 1200x800x24" npx grunt testui
@@ -74,7 +84,6 @@ jobs:
         if: success()
         env:
           CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
-          CHROME_DEVEL_SANDBOX: ${{ steps.setup-chrome.outputs.chrome-sandbox }}
         run: |
           xvfb-run --server-args="-screen 0 1200x800x24" npm run testwebmcp
 
