@@ -71,22 +71,9 @@ TestRegister.addApiTests([
                 type: "insert",
                 operationName: "To Base64",
             }],
-        }, 32);
+        });
         assert.equal(allowed.standardModificationAllowed, true);
         assert.equal(allowed.agentBakeAllowed, true);
-
-        const resourceUnchecked = authorizeAgentRecipePatch({
-            steps: [{
-                operation: {op: "To Base64", args: ["A-Za-z0-9+/="]},
-            }],
-            actions: [{
-                commandIndex: 0,
-                type: "insert",
-                operationName: "To Base64",
-            }],
-        });
-        assert.equal(resourceUnchecked.standardModificationAllowed, true);
-        assert.equal(resourceUnchecked.agentBakeAllowed, false);
 
         assert.throws(() => authorizeAgentRecipePatch({
             steps: [{
@@ -110,19 +97,19 @@ TestRegister.addApiTests([
                 type: "remove",
                 operationName: "Register",
             }],
-        }, 32);
+        });
         assert.equal(reduced.agentBakeAllowed, true);
 
         const blockedExecution = authorizeAgentRecipePatch({
             steps: [{
-                operation: {op: "Register", args: ["R0", "{0}"]},
+                operation: {op: "Register", args: ["([\\s\\S]*)", true, false, false]},
             }],
             actions: [{
                 commandIndex: 0,
                 type: "remove",
                 operationName: "To Base64",
             }],
-        }, 32);
+        });
         assert.equal(blockedExecution.standardModificationAllowed, false);
         assert.equal(blockedExecution.agentBakeAllowed, false);
     }),
@@ -138,7 +125,7 @@ TestRegister.addApiTests([
                     type: "insert",
                     operationName: "Generate HOTP",
                 }],
-            }, 32),
+            }),
             serialized = JSON.stringify(approved);
 
         assert.equal(approved.approvalRequired, true);
@@ -154,7 +141,7 @@ TestRegister.addApiTests([
         assert.equal(serialized.includes("42"), false);
     }),
 
-    it("WebMCPAgentRecipePatchPolicy: should block invalid and repeated HOTP targets before approval", () => {
+    it("WebMCPAgentRecipePatchPolicy: should reject invalid approval arguments", () => {
         const createPatch = (steps, actionType="insert") => ({
             steps,
             actions: [{
@@ -166,13 +153,7 @@ TestRegister.addApiTests([
 
         assert.throws(() => authorizeAgentRecipePatch(createPatch([{
             operation: {op: "Generate HOTP", args: ["Account", 9, 0]},
-        }]), 32), error => error instanceof RecipeTransactionError &&
-            error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED);
-        assert.throws(() => authorizeAgentRecipePatch(createPatch([{
-            operation: {op: "Generate HOTP", args: ["Account", 6, 0]},
-        }, {
-            operation: {op: "Generate HOTP", args: ["Second", 6, 1]},
-        }]), 32), error => error instanceof RecipeTransactionError &&
+        }])), error => error instanceof RecipeTransactionError &&
             error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED);
     }),
 ]);

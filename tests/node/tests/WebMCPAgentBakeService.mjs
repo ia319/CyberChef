@@ -249,7 +249,7 @@ TestRegister.addApiTests([
         const cases = [
             [{op: "HTTP request", args: []}, AGENT_BAKE_ERROR_CODE.RISK_BLOCKED],
             [{op: "To Hex", args: ["SECRET_DELIMITER", 0]}, AGENT_BAKE_ERROR_CODE.RISK_BLOCKED],
-            [{op: "Unzip", args: []}, AGENT_BAKE_ERROR_CODE.UNREVIEWED_OPERATION],
+            [{op: "Magic", args: [3, false, false, ""]}, AGENT_BAKE_ERROR_CODE.RISK_BLOCKED],
         ];
         for (const [operation, expectedCode] of cases) {
             const {service, evidence} = createFixture({recipeConfig: [operation]});

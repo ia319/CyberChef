@@ -60,8 +60,7 @@ function mapRecipeTransactionError(error) {
             TOOL_ERROR_CODE.UNKNOWN_STEP : TOOL_ERROR_CODE.INVALID_PATCH;
     }
     if (error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED) {
-        return error.policyCode === "PROFILE_REQUIRED" ?
-            TOOL_ERROR_CODE.UNREVIEWED_OPERATION : TOOL_ERROR_CODE.RISK_BLOCKED;
+        return TOOL_ERROR_CODE.RISK_BLOCKED;
     }
     return TOOL_ERROR_CODE.INTERNAL_ERROR;
 }

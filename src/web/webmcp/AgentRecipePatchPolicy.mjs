@@ -44,16 +44,15 @@ function prepareAgentRecipeChanges(changes) {
  * Enforces Agent mutation policy against the complete post-change Recipe.
  *
  * @param {Object} patch - Prepared Recipe patch result.
- * @param {number|null} [activeInputBytes=null] - Current active Input byte count.
  * @returns {Object} Complete post-change Recipe preflight result.
  * @throws {RecipeTransactionError} When the complete Recipe or an action is blocked.
  */
-function authorizeAgentRecipePatch(patch, activeInputBytes=null) {
+function authorizeAgentRecipePatch(patch) {
     const preflightResult = preflightOperationRecipe(patch.steps.map(step => ({
         operationName: step.operation.op,
         arguments: step.operation.args,
         disabled: step.operation.disabled === true,
-    })), activeInputBytes);
+    })));
 
     let approvalRequired = false;
     for (const action of patch.actions) {

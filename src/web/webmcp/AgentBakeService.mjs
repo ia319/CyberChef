@@ -19,7 +19,6 @@ import {
 
 const UNREVIEWED_ISSUE_CODES = new Set([
     PREFLIGHT_ISSUE_CODE.UNKNOWN_OPERATION,
-    PREFLIGHT_ISSUE_CODE.PROFILE_REQUIRED,
     PREFLIGHT_ISSUE_CODE.UNREVIEWED_OPERATION,
 ]);
 
@@ -215,10 +214,7 @@ class AgentBakeService {
 
         const recipeConfig = this.#manager.recipe.getConfig(),
             projection = this.#manager.recipe.getReadProjection(),
-            preflight = preflightOperationRecipe(
-                createPreflightRecipe(recipeConfig),
-                inputState.inputByteLength
-            ),
+            preflight = preflightOperationRecipe(createPreflightRecipe(recipeConfig)),
             preflightErrorCode = getPreflightErrorCode(preflight, userApproval);
         if (projection.recipeRevision !== expectedRevision) {
             throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.STALE_RECIPE);
