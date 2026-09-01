@@ -1,5 +1,5 @@
 import { OPERATION_CATALOG } from "./OperationCatalog.mjs";
-import { OPERATION_PROFILES } from "./OperationProfiles.mjs";
+import {STANDARD_OPERATION_PROFILES} from "./OperationProfiles.mjs";
 import { isOperationResourceLimits } from "./OperationResourcePolicy.mjs";
 
 const REVIEW_STATUS = Object.freeze({
@@ -176,7 +176,7 @@ const KNOWN_RISK_OPERATION_POLICIES = Object.freeze([
 const REVIEWED_OPERATION_POLICIES = Object.freeze([
     ...DENIED_OPERATION_POLICIES,
     ...KNOWN_RISK_OPERATION_POLICIES,
-    ...OPERATION_PROFILES.map(allowedPolicy),
+    ...STANDARD_OPERATION_PROFILES.map(allowedPolicy),
 ]);
 
 

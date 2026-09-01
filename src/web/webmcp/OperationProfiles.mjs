@@ -1,5 +1,6 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
 import { DATA_FORMAT_OPERATION_PROFILE_CONFIGS } from "./DataFormatOperationProfiles.mjs";
+import {OTP_OPERATION_PROFILE_CONFIGS} from "./OtpOperationProfiles.mjs";
 import {
     PROFILE_VALIDATION_CODE,
     resolveOperationProfileArguments,
@@ -234,9 +235,16 @@ const GOLDEN_OPERATION_PROFILES = Object.freeze([
 const DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
     DATA_FORMAT_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
-const OPERATION_PROFILES = Object.freeze([
+const APPROVAL_OPERATION_PROFILES = Object.freeze(
+    OTP_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
+);
+const STANDARD_OPERATION_PROFILES = Object.freeze([
     ...GOLDEN_OPERATION_PROFILES,
     ...DATA_FORMAT_OPERATION_PROFILES,
+]);
+const OPERATION_PROFILES = Object.freeze([
+    ...STANDARD_OPERATION_PROFILES,
+    ...APPROVAL_OPERATION_PROFILES,
 ]);
 
 const PROFILES_BY_NAME = new Map(OPERATION_PROFILES.map(profile => [profile.operationName, profile]));
@@ -257,6 +265,7 @@ function getOperationProfile(operationName) {
 
 
 export {
+    APPROVAL_OPERATION_PROFILES,
     BASE64_ALPHABETS,
     DATA_FORMAT_OPERATION_PROFILES,
     FROM_HEX_DELIMITERS,
@@ -266,6 +275,7 @@ export {
     OPERATION_PROFILES,
     PROFILE_ARGUMENT_RULE,
     PROFILE_VALIDATION_CODE,
+    STANDARD_OPERATION_PROFILES,
     TO_HEX_DELIMITERS,
     defineOperationProfile,
     getOperationProfile,
