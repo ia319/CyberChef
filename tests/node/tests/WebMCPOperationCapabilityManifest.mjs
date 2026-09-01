@@ -151,6 +151,7 @@ TestRegister.addApiTests([
             "From Decimal",
             "From Float",
             "From Hex",
+            "From Hexdump",
             "From Octal",
             "ROT13",
             "To Base32",
@@ -167,6 +168,7 @@ TestRegister.addApiTests([
             "To Decimal",
             "To Float",
             "To Hex",
+            "To Hexdump",
             "To Octal",
             "URL Decode",
             "URL Encode",
@@ -207,10 +209,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 35,
+            safe: 37,
             constrained: 1,
             denied: 9,
-            unreviewed: 459,
+            unreviewed: 457,
         });
     }),
 
