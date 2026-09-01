@@ -1,4 +1,5 @@
 import { OPERATION_CATALOG } from "./OperationCatalog.mjs";
+import {OPERATION_ACCESS_AUDIT} from "./OperationAccessAudit.mjs";
 import {
     APPROVAL_OPERATION_PROFILES,
     STANDARD_OPERATION_PROFILES,
@@ -327,6 +328,7 @@ function createOperationCapabilityManifest(
 
             return Object.freeze({
                 operationName,
+                operationAccess: OPERATION_ACCESS_AUDIT.getOperationAccess(operationName),
                 reviewStatus: reviewed?.reviewStatus ?? REVIEW_STATUS.UNREVIEWED,
                 coreInputType: operation.inputType,
                 coreOutputType: operation.coreOutputType,

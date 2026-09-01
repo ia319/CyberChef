@@ -1,5 +1,9 @@
 import assert from "assert";
 import {
+    OPERATION_ACCESS,
+    OPERATION_ACCESS_AUDIT,
+} from "../../../src/web/webmcp/OperationAccessAudit.mjs";
+import {
     CAPABILITY_FIELDS,
     OPERATION_CAPABILITY_MANIFEST,
     OPERATION_POLICY,
@@ -33,6 +37,52 @@ const createConfig = operationNames => Object.fromEntries(operationNames.map(ope
 
 
 TestRegister.addApiTests([
+    it("WebMCPOperationCapabilityManifest: should preserve the complete access audit", () => {
+        const auditedNames = OPERATION_ACCESS_AUDIT.getOperationNames(),
+            catalogNames = OPERATION_CATALOG.getOperationNames(),
+            counts = Object.fromEntries(Object.values(OPERATION_ACCESS).map(access => [access, 0]));
+
+        assert.equal(OPERATION_ACCESS_AUDIT.size, 504);
+        assert.equal(new Set(auditedNames).size, 504);
+        assert.deepStrictEqual([...auditedNames].sort(), [...catalogNames].sort());
+        for (const operationName of catalogNames) {
+            const access = OPERATION_ACCESS_AUDIT.getOperationAccess(operationName);
+            counts[access]++;
+            assert.equal(
+                OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName).operationAccess,
+                access,
+                operationName
+            );
+        }
+        assert.deepStrictEqual(counts, {
+            direct: 447,
+            approval: 51,
+            blocked: 5,
+            excluded: 1,
+            unreviewed: 0,
+        });
+    }),
+
+    it("WebMCPOperationCapabilityManifest: should preserve audited access boundaries", () => {
+        for (const operationName of [
+            "Magic", "Parse colour code", "Render Markdown", "Scatter chart", "Series chart",
+        ]) {
+            assert.equal(OPERATION_ACCESS_AUDIT.getOperationAccess(operationName), OPERATION_ACCESS.BLOCKED);
+        }
+        for (const operationName of [
+            "Generate HOTP", "HTTP request", "To Table", "Get Time", "Register",
+        ]) {
+            assert.equal(OPERATION_ACCESS_AUDIT.getOperationAccess(operationName), OPERATION_ACCESS.APPROVAL);
+        }
+        assert.equal(
+            OPERATION_ACCESS_AUDIT.getOperationAccess("Automated Validation Test Op"),
+            OPERATION_ACCESS.EXCLUDED
+        );
+        for (const operationName of ["Reverse", "AES Encrypt", "Unzip"]) {
+            assert.equal(OPERATION_ACCESS_AUDIT.getOperationAccess(operationName), OPERATION_ACCESS.DIRECT);
+        }
+    }),
+
     it("WebMCPOperationCapabilityManifest: should cover every catalog Operation exactly once", () => {
         assert.equal(OPERATION_CAPABILITY_MANIFEST.size, OPERATION_CATALOG.size);
         assert.deepStrictEqual(
@@ -255,6 +305,11 @@ TestRegister.addApiTests([
             assert.equal(
                 manifest.getOperationCapability(operationName).reviewStatus,
                 REVIEW_STATUS.UNREVIEWED,
+                operationName
+            );
+            assert.equal(
+                manifest.getOperationCapability(operationName).operationAccess,
+                OPERATION_ACCESS.UNREVIEWED,
                 operationName
             );
         }
