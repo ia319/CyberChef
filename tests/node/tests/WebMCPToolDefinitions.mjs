@@ -44,9 +44,13 @@ const VALID_INPUTS = Object.freeze({
     [TOOL_NAME.GET_RECIPE_STATE]: {},
     [TOOL_NAME.APPLY_RECIPE_PATCH]: {
         expectedRevision: 2,
+        recipeApprovalRequestId: "approval-request-1",
         changes: [{type: "insert", operation: "To Base64", arguments: ["A-Za-z0-9+/="]}],
     },
-    [TOOL_NAME.BAKE_RECIPE]: {expectedRevision: 2},
+    [TOOL_NAME.BAKE_RECIPE]: {
+        expectedRevision: 2,
+        bakeApprovalRequestId: "approval-request-1",
+    },
     [TOOL_NAME.INSPECT_OUTPUT]: {bakeId: 7},
 });
 

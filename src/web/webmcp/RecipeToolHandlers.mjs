@@ -4,6 +4,13 @@ import {
     RecipeTransactionError,
 } from "../recipe/RecipeTransaction.mjs";
 import {USER_BAKE_REQUIRED} from "./BakeResultContext.mjs";
+import {
+    APPROVAL_ERROR_CODE,
+    APPROVAL_MODE,
+    APPROVAL_STATE,
+    ApprovalError,
+} from "./ApprovalCoordinator.mjs";
+import {createApprovalErrorContext} from "./ApprovalResultContext.mjs";
 import {ToolExecutionError} from "./ToolExecutor.mjs";
 import {TOOL_NAME} from "./ToolDefinitions.mjs";
 import {
@@ -79,16 +86,43 @@ function createActionSummary(actions) {
 
 
 /**
+ * Creates the exact mutation action bound to the visible approval request.
+ *
+ * @param {Object} input - Schema-validated patch input.
+ * @param {Object} workspaceBinding - Content-free active workspace identity.
+ * @returns {Object} Exact approval action without the request reference.
+ */
+function createRecipeApprovalAction(input, workspaceBinding) {
+    return {
+        kind: "recipeMutation",
+        expectedRevision: input.expectedRevision,
+        changes: input.changes,
+        workspaceBinding,
+    };
+}
+
+
+/**
  * Creates Recipe collaboration handlers around the shared Recipe service.
  *
  * @param {Object} recipeWaiter - Recipe state and transaction service.
  * @param {Object|null} [runStateService=null] - Optional active Run state service.
+ * @param {ApprovalCoordinator|null} [approvals=null] - Optional one-use approval owner.
  * @returns {Object} Handlers keyed by formal tool name.
  */
-function createRecipeToolHandlers(recipeWaiter, runStateService=null) {
+function createRecipeToolHandlers(recipeWaiter, runStateService=null, approvals=null) {
     if (!recipeWaiter || typeof recipeWaiter.getReadProjection !== "function" ||
         typeof recipeWaiter.applyAgentPatch !== "function" ||
-        runStateService !== null && typeof runStateService.getActiveState !== "function") {
+        runStateService !== null && typeof runStateService.getActiveState !== "function" ||
+        approvals !== null && (
+            typeof approvals.requestApproval !== "function" ||
+            typeof approvals.consumeMutation !== "function" ||
+            typeof approvals.completeMutation !== "function" ||
+            typeof approvals.getState !== "function" ||
+            typeof recipeWaiter.prepareAgentPatch !== "function" ||
+            typeof recipeWaiter.commitAgentPatch !== "function" ||
+            typeof recipeWaiter.commitApprovedAgentPatch !== "function"
+        )) {
         throw new TypeError("Recipe tool handlers require the Recipe service");
     }
 
@@ -161,6 +195,32 @@ function createRecipeToolHandlers(recipeWaiter, runStateService=null) {
     function applyRecipePatch(input, invocation) {
         invocation.checkpoint();
 
+        if (!approvals) return commitStandardPatch(input, invocation);
+
+        let preparedPatch;
+        try {
+            preparedPatch = recipeWaiter.prepareAgentPatch(input);
+        } catch (err) {
+            throw new ToolExecutionError(mapRecipeTransactionError(err));
+        }
+
+        if (preparedPatch.authorization?.approvalRequired !== true) {
+            if (typeof input.recipeApprovalRequestId !== "undefined") {
+                throw new ToolExecutionError(TOOL_ERROR_CODE.INVALID_REQUEST);
+            }
+            return commitPreparedStandardPatch(preparedPatch, invocation);
+        }
+        return applyApprovedPatch(input, preparedPatch, invocation);
+    }
+
+    /**
+     * Preserves the standard policy path when no approval owner is configured.
+     *
+     * @param {Object} input - Schema-validated Recipe patch input.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @returns {Object} Handler result.
+     */
+    function commitStandardPatch(input, invocation) {
         let result;
         try {
             result = recipeWaiter.applyAgentPatch(
@@ -171,6 +231,135 @@ function createRecipeToolHandlers(recipeWaiter, runStateService=null) {
             throw new ToolExecutionError(mapRecipeTransactionError(err));
         }
 
+        return createPatchResult(result, invocation, false);
+    }
+
+    /**
+     * Commits a prepared standard-policy patch with its existing Auto Bake contract.
+     *
+     * @param {Object} preparedPatch - Waiter-owned one-use patch.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @returns {Object} Handler result.
+     */
+    function commitPreparedStandardPatch(preparedPatch, invocation) {
+        let result;
+        try {
+            result = recipeWaiter.commitAgentPatch(
+                preparedPatch,
+                () => invocation.createApplicationWork()
+            );
+        } catch (err) {
+            throw new ToolExecutionError(mapRecipeTransactionError(err));
+        }
+
+        return createPatchResult(result, invocation, false);
+    }
+
+    /**
+     * Requests or consumes a one-use approval before committing a sensitive patch.
+     *
+     * @param {Object} input - Schema-validated Recipe patch input.
+     * @param {Object} preparedPatch - Waiter-owned one-use patch.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @returns {Promise<Object>} Handler result after an exact approved mutation.
+     */
+    async function applyApprovedPatch(input, preparedPatch, invocation) {
+        const summary = preparedPatch.authorization.approvalSummary,
+            workspaceBinding = preparedPatch.workspaceBinding;
+        if (!summary || !workspaceBinding) {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.TAB_MISMATCH);
+        }
+
+        const action = createRecipeApprovalAction(input, workspaceBinding);
+        if (typeof input.recipeApprovalRequestId === "undefined") {
+            let request;
+            try {
+                request = await approvals.requestApproval({
+                    sessionEpoch: invocation.sessionEpoch,
+                    action,
+                    summary,
+                });
+            } catch (err) {
+                if (err instanceof ApprovalError &&
+                    err.code === APPROVAL_ERROR_CODE.REQUEST_BUSY) {
+                    throw new ToolExecutionError(TOOL_ERROR_CODE.USER_ACTION_REQUIRED);
+                }
+                throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);
+            }
+            invocation.checkpoint();
+            throw new ToolExecutionError(
+                TOOL_ERROR_CODE.USER_ACTION_REQUIRED,
+                createApprovalErrorContext(
+                    request,
+                    invocation.sessionEpoch,
+                    input.expectedRevision
+                )
+            );
+        }
+
+        let permit;
+        try {
+            permit = await approvals.consumeMutation({
+                requestId: input.recipeApprovalRequestId,
+                sessionEpoch: invocation.sessionEpoch,
+                action,
+            });
+        } catch (err) {
+            const request = approvals.getState();
+            if (err instanceof ApprovalError &&
+                err.code === APPROVAL_ERROR_CODE.REQUEST_STATE_MISMATCH &&
+                request.requestId === input.recipeApprovalRequestId &&
+                request.state === APPROVAL_STATE.PENDING) {
+                throw new ToolExecutionError(
+                    TOOL_ERROR_CODE.USER_ACTION_REQUIRED,
+                    createApprovalErrorContext(
+                        request,
+                        invocation.sessionEpoch,
+                        input.expectedRevision
+                    )
+                );
+            }
+            throw new ToolExecutionError(TOOL_ERROR_CODE.INVALID_REQUEST);
+        }
+
+        invocation.checkpoint();
+        const includeBakeTarget = permit.mode === APPROVAL_MODE.RECIPE_AND_BAKE;
+        let commit;
+        try {
+            commit = recipeWaiter.commitApprovedAgentPatch(preparedPatch, includeBakeTarget);
+        } catch (err) {
+            await approvals.completeMutation({
+                requestId: input.recipeApprovalRequestId,
+                sessionEpoch: invocation.sessionEpoch,
+                succeeded: false,
+            });
+            throw new ToolExecutionError(mapRecipeTransactionError(err));
+        }
+
+        try {
+            await approvals.completeMutation({
+                requestId: input.recipeApprovalRequestId,
+                sessionEpoch: invocation.sessionEpoch,
+                succeeded: true,
+                bakeTarget: commit.bakeTarget,
+            });
+        } catch {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);
+        }
+        invocation.checkpoint();
+        return createPatchResult(commit.result, invocation, includeBakeTarget);
+    }
+
+    /**
+     * Creates one value-redacted Recipe mutation result.
+     *
+     * @param {Object} result - Transaction result.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @param {boolean} approvedBakeAvailable - Whether one exact approved Bake remains.
+     * @returns {Object} Handler data and collaboration state.
+     */
+    function createPatchResult(result, invocation, approvedBakeAvailable) {
+
         const actions = result.status === RECIPE_TRANSACTION_STATUS.COMMITTED ?
                 result.change.actions : [],
             data = {
@@ -180,6 +369,7 @@ function createRecipeToolHandlers(recipeWaiter, runStateService=null) {
                     commandIndexes: result.insertedSteps.map(step => step.commandIndex),
                     stepIds: result.insertedSteps.map(step => step.stepId),
                 },
+                approvedBakeAvailable,
             },
             state = createCollaborationState(invocation, result.recipeRevision);
 

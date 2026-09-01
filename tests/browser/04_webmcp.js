@@ -273,6 +273,76 @@ module.exports = {
         browser.expect.element("#webmcp-approval").to.not.be.visible;
     },
 
+    "Approval permits follow workspace lifecycle changes": browser => {
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            const manager = window.app.manager,
+                sessionEpoch = manager.webmcp.session.getState().sessionEpoch,
+                summary = {
+                    operationNames: ["Generate HOTP"],
+                    changeTypes: ["insert"],
+                    sensitiveParameterNames: ["Secret"],
+                    riskFlags: ["secretInput"],
+                },
+                request = suffix => manager.approvals.requestApproval({
+                    sessionEpoch,
+                    action: {kind: "recipeMutation", suffix},
+                    summary,
+                });
+            try {
+                await request("input");
+                window.dispatchEvent(new CustomEvent("statechange", {
+                    detail: {inputNum: 1},
+                }));
+                const inputChange = manager.approvals.getState();
+
+                await request("target");
+                window.dispatchEvent(new CustomEvent("workspaceviewchange", {
+                    detail: {viewVersion: 20},
+                }));
+                const targetChange = manager.approvals.getState();
+
+                await request("recipe");
+                window.dispatchEvent(new CustomEvent("recipechange", {
+                    detail: {actor: "user", source: "api"},
+                }));
+                const recipeChange = manager.approvals.getState();
+
+                const approved = await request("approved-agent-commit"),
+                    action = {kind: "recipeMutation", suffix: "approved-agent-commit"};
+                manager.approvals.approve(approved.requestId, sessionEpoch, "recipeOnly");
+                await manager.approvals.consumeMutation({
+                    requestId: approved.requestId,
+                    sessionEpoch,
+                    action,
+                });
+                window.dispatchEvent(new CustomEvent("recipechange", {
+                    detail: {actor: "agent", source: "webmcp"},
+                }));
+                const approvedCommit = manager.approvals.getState();
+                await manager.approvals.completeMutation({
+                    requestId: approved.requestId,
+                    sessionEpoch,
+                    succeeded: false,
+                });
+
+                done({inputChange, targetChange, recipeChange, approvedCommit});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.inputChange.state, "cancelled");
+            browser.assert.strictEqual(value.inputChange.endReason, "inputChanged");
+            browser.assert.strictEqual(value.targetChange.state, "cancelled");
+            browser.assert.strictEqual(value.targetChange.endReason, "outputTargetChanged");
+            browser.assert.strictEqual(value.recipeChange.state, "cancelled");
+            browser.assert.strictEqual(value.recipeChange.endReason, "recipeChanged");
+            browser.assert.strictEqual(value.approvedCommit.state, "mutationConsumed");
+        });
+        browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
+    },
+
     "Recipe tools support a real discovery and collaboration flow": browser => {
         browser.executeAsync(async done => {
             try {

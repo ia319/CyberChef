@@ -13,10 +13,10 @@ import {
 class ToolExecutionError extends Error {
 
     /**
-     * Preserves a reviewed public error code and optional terminal Bake context.
+     * Preserves a reviewed public error code and optional bounded context.
      *
      * @param {string} code - Error code from TOOL_ERROR_CODE.
-     * @param {Object|undefined} [context] - Reviewed terminal Bake context.
+     * @param {Object|undefined} [context] - Reviewed Bake or approval context.
      */
     constructor(code, context) {
         super("WebMCP tool execution failed");

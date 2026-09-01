@@ -240,6 +240,9 @@ class TabWaiter {
             throw new RangeError("View version limit reached");
         }
         this.viewVersion++;
+        window.dispatchEvent(new CustomEvent("workspaceviewchange", {
+            detail: {viewVersion: this.viewVersion},
+        }));
     }
 
     /**

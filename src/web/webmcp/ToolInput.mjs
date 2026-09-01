@@ -68,6 +68,9 @@ function matchesSchema(value, schema, depth) {
             const length = [...value].length;
             if (typeof schema.minLength === "number" && length < schema.minLength) return false;
             if (typeof schema.maxLength === "number" && length > schema.maxLength) return false;
+            if (typeof schema.pattern === "string" && !new RegExp(schema.pattern, "u").test(value)) {
+                return false;
+            }
             return true;
         }
         case "integer":

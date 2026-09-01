@@ -1,4 +1,9 @@
 import assert from "assert";
+import {
+    APPROVAL_MODE,
+    APPROVAL_STATE,
+    ApprovalCoordinator,
+} from "../../../src/web/webmcp/ApprovalCoordinator.mjs";
 import CollaborationSession from "../../../src/web/webmcp/CollaborationSession.mjs";
 import {createRecipeToolHandlers} from "../../../src/web/webmcp/RecipeToolHandlers.mjs";
 import {
@@ -69,6 +74,95 @@ const executeRecipeState = async (projection, input, epoch=19) => {
         input
     );
 };
+
+
+/**
+ * Creates an approval-aware Recipe handler without visible application state.
+ *
+ * @returns {Object} Tool executor, approval owner, and mutation evidence.
+ */
+function createApprovalFixture() {
+    let commitCount = 0;
+    const approvals = new ApprovalCoordinator({
+            idFactory: () => "approval-request-1",
+        }),
+        workspaceBinding = Object.freeze({
+            source: "agent",
+            recipeRevisionAtStart: 7,
+            inputTargets: Object.freeze([Object.freeze({
+                inputTabId: 1,
+                inputGeneration: "1:2",
+                inputRevision: 3,
+                outputTabId: 1,
+                outputGeneration: 4,
+            })]),
+            activeInputTabId: 1,
+            activeOutputTabId: 1,
+            tabsSynchronized: true,
+            viewVersion: 5,
+            executionOptionsVersion: 0,
+            progress: 0,
+            step: false,
+        }),
+        bakeTarget = Object.freeze({...workspaceBinding, recipeRevisionAtStart: 8}),
+        recipeWaiter = {
+            getReadProjection: () => createProjection(),
+            applyAgentPatch: () => {
+                throw new Error("Legacy patch path must remain unused");
+            },
+            prepareAgentPatch: () => Object.freeze({
+                authorization: Object.freeze({
+                    approvalRequired: true,
+                    approvalSummary: Object.freeze({
+                        operationNames: Object.freeze(["Generate HOTP"]),
+                        changeTypes: Object.freeze(["insert"]),
+                        sensitiveParameterNames: Object.freeze(["Secret"]),
+                        riskFlags: Object.freeze(["secretInput"]),
+                    }),
+                }),
+                workspaceBinding,
+            }),
+            commitAgentPatch: () => {
+                throw new Error("Standard patch path must remain unused");
+            },
+            commitApprovedAgentPatch: (preparedPatch, includeBakeTarget) => {
+                commitCount++;
+                return {
+                    result: {
+                        status: RECIPE_TRANSACTION_STATUS.COMMITTED,
+                        recipeRevision: 8,
+                        insertedSteps: [{commandIndex: 0, stepId: "transaction-step-1"}],
+                        change: {
+                            actions: [{
+                                commandIndex: 0,
+                                type: "insert",
+                                operationName: "Generate HOTP",
+                                stepId: "transaction-step-1",
+                            }],
+                        },
+                    },
+                    bakeTarget: includeBakeTarget ? bakeTarget : null,
+                };
+            },
+        },
+        handler = createRecipeToolHandlers(
+            recipeWaiter,
+            null,
+            approvals
+        )[TOOL_NAME.APPLY_RECIPE_PATCH],
+        session = new CollaborationSession(true, () => "session-approval-1");
+    session.start();
+
+    return {
+        approvals,
+        execute: input => executeTool(
+            TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH],
+            (value, signal) => session.execute(handler, value, signal),
+            input
+        ),
+        getCommitCount: () => commitCount,
+    };
+}
 
 
 TestRegister.addApiTests([
@@ -231,6 +325,7 @@ TestRegister.addApiTests([
                 commandIndexes: [1],
                 stepIds: ["transaction-step-1"],
             },
+            approvedBakeAvailable: false,
         });
         assert.equal(serialized.includes(argumentCanary), false);
         assert.equal(serialized.includes("To Base64"), false);
@@ -275,6 +370,109 @@ TestRegister.addApiTests([
 
         assert(JSON.stringify(envelope).length <= TOOL_RESULT_MAX_CHARS);
         assert.equal(result.data.insertedSteps.stepIds.length, 20);
+    }),
+
+    it("WebMCPRecipeToolHandlers: should require one exact page approval before mutation", async () => {
+        const fixture = createApprovalFixture(),
+            input = {
+                expectedRevision: 7,
+                changes: [{
+                    type: "insert",
+                    operation: "Generate HOTP",
+                    arguments: ["SECRET_ARGUMENT_CANARY", 1, 6, 30, "SHA1"],
+                }],
+            },
+            pending = await fixture.execute(input);
+
+        assert.equal(pending.error.code, TOOL_ERROR_CODE.USER_ACTION_REQUIRED);
+        assert.equal(pending.error.approvalRequestId, "approval-request-1");
+        assert.equal(pending.state.approvalState, APPROVAL_STATE.PENDING);
+        assert.equal(fixture.getCommitCount(), 0);
+        assert.equal(JSON.stringify(pending).includes("SECRET_ARGUMENT_CANARY"), false);
+
+        const stillPending = await fixture.execute({
+            ...input,
+            recipeApprovalRequestId: pending.error.approvalRequestId,
+        });
+        assert.equal(stillPending.error.code, TOOL_ERROR_CODE.USER_ACTION_REQUIRED);
+        assert.equal(stillPending.error.approvalRequestId, pending.error.approvalRequestId);
+        assert.equal(fixture.getCommitCount(), 0);
+
+        fixture.approvals.approve(
+            pending.error.approvalRequestId,
+            "session-approval-1",
+            APPROVAL_MODE.RECIPE_ONLY
+        );
+        const committed = await fixture.execute({
+            ...input,
+            recipeApprovalRequestId: pending.error.approvalRequestId,
+        });
+        assert.equal(committed.ok, true);
+        assert.equal(committed.data.status, RECIPE_TRANSACTION_STATUS.COMMITTED);
+        assert.equal(committed.data.approvedBakeAvailable, false);
+        assert.equal(fixture.approvals.getState().state, APPROVAL_STATE.COMPLETE);
+        assert.equal(fixture.getCommitCount(), 1);
+
+        const replay = await fixture.execute({
+            ...input,
+            recipeApprovalRequestId: pending.error.approvalRequestId,
+        });
+        assert.equal(replay.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);
+        assert.equal(fixture.getCommitCount(), 1);
+    }),
+
+    it("WebMCPRecipeToolHandlers: should bind an approved Bake and reject changed arguments", async () => {
+        const changed = createApprovalFixture(),
+            input = {
+                expectedRevision: 7,
+                changes: [{
+                    type: "insert",
+                    operation: "Generate HOTP",
+                    arguments: ["FIRST_SECRET_CANARY", 1, 6, 30, "SHA1"],
+                }],
+            },
+            pending = await changed.execute(input);
+        changed.approvals.approve(
+            pending.error.approvalRequestId,
+            "session-approval-1",
+            APPROVAL_MODE.RECIPE_AND_BAKE
+        );
+        const mismatch = await changed.execute({
+            expectedRevision: 7,
+            recipeApprovalRequestId: pending.error.approvalRequestId,
+            changes: [{
+                ...input.changes[0],
+                arguments: ["SECOND_SECRET_CANARY", 1, 6, 30, "SHA1"],
+            }],
+        });
+        assert.equal(mismatch.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);
+        assert.equal(changed.getCommitCount(), 0);
+
+        const fixture = createApprovalFixture(),
+            bakePending = await fixture.execute(input);
+        fixture.approvals.approve(
+            bakePending.error.approvalRequestId,
+            "session-approval-1",
+            APPROVAL_MODE.RECIPE_AND_BAKE
+        );
+        const committed = await fixture.execute({
+            ...input,
+            recipeApprovalRequestId: bakePending.error.approvalRequestId,
+        });
+        assert.equal(committed.ok, true);
+        assert.equal(committed.data.approvedBakeAvailable, true);
+        assert.equal(fixture.approvals.getState().state, APPROVAL_STATE.BAKE_AVAILABLE);
+        assert.equal(fixture.getCommitCount(), 1);
+        assert.equal(JSON.stringify(committed).includes("FIRST_SECRET_CANARY"), false);
+    }),
+
+    it("WebMCPRecipeToolHandlers: should reject invalid patches before approval state", async () => {
+        const fixture = createApprovalFixture(),
+            invalid = await fixture.execute({expectedRevision: 7, changes: []});
+
+        assert.equal(invalid.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);
+        assert.equal(fixture.approvals.getState().state, APPROVAL_STATE.NONE);
+        assert.equal(fixture.getCommitCount(), 0);
     }),
 
     it("WebMCPRecipeToolHandlers: should map transaction failures without returning diagnostics", () => {

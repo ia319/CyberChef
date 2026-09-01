@@ -51,6 +51,25 @@ TestRegister.addApiTests([
         assert.equal(validateToolInput({query: "🧑‍💻ab"}, SEARCH_SCHEMA).valid, false);
     }),
 
+    it("WebMCPToolInput: should enforce fixed string patterns", () => {
+        const schema = {
+            type: "object",
+            properties: {
+                requestId: {
+                    type: "string",
+                    minLength: 16,
+                    maxLength: 128,
+                    pattern: "^[A-Za-z0-9_-]+$",
+                },
+            },
+            required: ["requestId"],
+            additionalProperties: false,
+        };
+
+        assert.equal(validateToolInput({requestId: "approval-request-1"}, schema).valid, true);
+        assert.equal(validateToolInput({requestId: "approval request!"}, schema).valid, false);
+    }),
+
     it("WebMCPToolInput: should enforce the total serialized input budget", () => {
         const schema = {
                 type: "object",

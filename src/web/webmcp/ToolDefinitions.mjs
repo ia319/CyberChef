@@ -63,6 +63,12 @@ const REVISION_SCHEMA = {
     description: "Recipe revision previously returned by CyberChef.",
 };
 
+const APPROVAL_REQUEST_ID_SCHEMA = {
+    type: "string",
+    pattern: "^[A-Za-z0-9_-]{16,128}$",
+    description: "Opaque request identifier issued by CyberChef for the exact approved action.",
+};
+
 const ARGUMENT_VALUE_SCHEMA = {
     anyOf: [
         {type: "string", maxLength: 16 * 1024},
@@ -222,6 +228,7 @@ const GET_RECIPE_STATE_SCHEMA = closedObject({
 
 const APPLY_RECIPE_PATCH_SCHEMA = closedObject({
     expectedRevision: REVISION_SCHEMA,
+    recipeApprovalRequestId: APPROVAL_REQUEST_ID_SCHEMA,
     changes: {
         type: "array",
         minItems: 1,
@@ -243,6 +250,7 @@ const APPLY_RECIPE_PATCH_SCHEMA = closedObject({
 
 const BAKE_RECIPE_SCHEMA = closedObject({
     expectedRevision: REVISION_SCHEMA,
+    bakeApprovalRequestId: APPROVAL_REQUEST_ID_SCHEMA,
 }, ["expectedRevision"]);
 
 const INSPECT_OUTPUT_SCHEMA = closedObject({

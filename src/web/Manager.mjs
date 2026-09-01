@@ -35,9 +35,14 @@ import {RunCoordinator} from "./run/RunCoordinator.mjs";
 import {AnalysisCoordinator} from "./analysis/AnalysisCoordinator.mjs";
 import {
     APPROVAL_END_REASON,
+    APPROVAL_STATE,
     ApprovalCoordinator,
 } from "./webmcp/ApprovalCoordinator.mjs";
 import {COLLABORATION_SESSION_STATE} from "./webmcp/CollaborationSession.mjs";
+import {
+    RECIPE_TRANSACTION_ACTOR,
+    RECIPE_TRANSACTION_SOURCE,
+} from "./recipe/RecipeTransaction.mjs";
 
 
 /**
@@ -120,8 +125,8 @@ class Manager {
             ACTIVE_BUILD_PROFILE,
             {
                 ...OPERATION_TOOL_HANDLERS,
-                ...createRecipeToolHandlers(this.recipe, runStateService),
-                ...createBakeRecipeToolHandlers(this.agentBake),
+                ...createRecipeToolHandlers(this.recipe, runStateService, this.approvals),
+                ...createBakeRecipeToolHandlers(this.agentBake, this.approvals),
                 ...createInspectOutputToolHandlers(this.agentAnalysis),
             }
         );
@@ -142,6 +147,22 @@ class Manager {
         });
         window.addEventListener("pagehide", () => {
             this.approvals.invalidate(APPROVAL_END_REASON.PAGE_LIFECYCLE);
+        });
+        window.addEventListener("statechange", () => {
+            this.approvals.invalidate(APPROVAL_END_REASON.INPUT_CHANGED);
+        });
+        window.addEventListener("workspaceviewchange", () => {
+            this.approvals.invalidate(APPROVAL_END_REASON.OUTPUT_TARGET_CHANGED);
+        });
+        window.addEventListener("recipechange", event => {
+            const approval = this.approvals.getState(),
+                change = event.detail,
+                expectedApprovedCommit = approval.state === APPROVAL_STATE.MUTATION_CONSUMED &&
+                    change?.actor === RECIPE_TRANSACTION_ACTOR.AGENT &&
+                    change?.source === RECIPE_TRANSACTION_SOURCE.WEBMCP;
+            if (!expectedApprovedCommit) {
+                this.approvals.invalidate(APPROVAL_END_REASON.RECIPE_CHANGED);
+            }
         });
 
         // Object to store dynamic handlers to fire on elements that may not exist yet
