@@ -57,13 +57,19 @@ jobs:
         run: |
           npx @puppeteer/browsers install chrome@152
           chrome_binary="$(find "$GITHUB_WORKSPACE/chrome" -type f -name chrome -print -quit)"
+          chrome_sandbox="/opt/google/chrome/chrome-sandbox"
           test -x "$chrome_binary"
+          test -x "$chrome_sandbox"
+          test -u "$chrome_sandbox"
+          test "$(stat -c %u "$chrome_sandbox")" -eq 0
           echo "chrome-binary=$chrome_binary" >> "$GITHUB_OUTPUT"
+          echo "chrome-sandbox=$chrome_sandbox" >> "$GITHUB_OUTPUT"
 
       - name: UI Tests
         if: success()
         env:
           CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
+          CHROME_DEVEL_SANDBOX: ${{ steps.setup-chrome.outputs.chrome-sandbox }}
         run: |
           sudo apt-get install xvfb
           xvfb-run --server-args="-screen 0 1200x800x24" npx grunt testui
@@ -72,19 +78,9 @@ jobs:
         if: success()
         env:
           CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
+          CHROME_DEVEL_SANDBOX: ${{ steps.setup-chrome.outputs.chrome-sandbox }}
         run: |
           xvfb-run --server-args="-screen 0 1200x800x24" npm run testwebmcp
-
-      - name: Browser Test Diagnostics
-        if: failure() && steps.setup-chrome.outcome == 'success'
-        env:
-          CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
-        run: |
-          "$CYBERCHEF_TEST_CHROME_BINARY" --version || true
-          ldd "$CYBERCHEF_TEST_CHROME_BINARY" || true
-          if [ -d tests/browser/output ]; then
-            find tests/browser/output -maxdepth 1 -type f -name '*chromedriver.log' -print -exec cat {} \;
-          fi
 
       - name: Set up Docker Buildx
         if: success()
