@@ -13,7 +13,8 @@ const CHANGE_TEXT = Object.freeze({
         setBreakpoint: "change an Operation breakpoint",
     }),
     RISK_TEXT = Object.freeze({
-        secretInput: "process a sensitive parameter",
+        secretInput: "process sensitive Input data",
+        sensitiveOutput: "produce sensitive output",
         networkAccess: "make a network request",
         richContent: "produce active or rich content",
         resourceIntensive: "use significant browser resources",

@@ -31,6 +31,7 @@ const APPROVAL_TTL_MS = 120_000,
     }),
     APPROVAL_RISK_FLAG = Object.freeze({
         SECRET_INPUT: "secretInput",
+        SENSITIVE_OUTPUT: "sensitiveOutput",
         NETWORK_ACCESS: "networkAccess",
         RICH_CONTENT: "richContent",
         RESOURCE_INTENSIVE: "resourceIntensive",

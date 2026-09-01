@@ -38,19 +38,61 @@ TestRegister.addApiTests([
             reviewStatus: "safe",
             supportedMutationActions: ALL_MUTATION_ACTIONS,
             agentBakeAllowed: true,
+            mutationPolicy: "allowed",
+            agentBakePolicy: "allowed",
+        });
+        assert.deepStrictEqual(getOperationPermissions("Generate HOTP"), {
+            discoverable: true,
+            reviewStatus: "constrained",
+            supportedMutationActions: ALL_MUTATION_ACTIONS,
+            agentBakeAllowed: false,
+            mutationPolicy: "userActionRequired",
+            agentBakePolicy: "userActionRequired",
         });
         assert.deepStrictEqual(getOperationPermissions("HTTP request"), {
             discoverable: true,
             reviewStatus: "denied",
             supportedMutationActions: REDUCTION_MUTATION_ACTIONS,
             agentBakeAllowed: false,
+            mutationPolicy: "blocked",
+            agentBakePolicy: "blocked",
         });
         assert.deepStrictEqual(getOperationPermissions("SECRET_OPERATION_CANARY"), {
             discoverable: false,
             reviewStatus: null,
             supportedMutationActions: [],
             agentBakeAllowed: false,
+            mutationPolicy: "blocked",
+            agentBakePolicy: "blocked",
         });
+    }),
+
+    it("WebMCPOperationPreflight: should isolate one technically valid HOTP approval target", () => {
+        const hotp = operationStep("Generate HOTP", ["Account", 6, 42]),
+            checked = preflightOperationRecipe([hotp], 32),
+            unchecked = preflightOperationRecipe([hotp]),
+            oversized = preflightOperationRecipe([hotp], 4097),
+            repeated = preflightOperationRecipe([hotp, hotp], 32);
+
+        assert.equal(checked.recipeValid, true);
+        assert.equal(checked.standardModificationAllowed, false);
+        assert.equal(checked.agentBakeAllowed, false);
+        assert.equal(checked.approvalRequired, true);
+        assert.equal(checked.approvalModificationAllowed, true);
+        assert.equal(checked.approvalBakeAllowed, true);
+        assert.deepStrictEqual(checked.approvalSummary, {
+            operationNames: ["Generate HOTP"],
+            sensitiveParameterNames: ["Name"],
+            riskFlags: ["secretInput", "sensitiveOutput"],
+        });
+        assert.equal(unchecked.approvalModificationAllowed, true);
+        assert.equal(unchecked.approvalBakeAllowed, false);
+        assert.equal(oversized.approvalModificationAllowed, true);
+        assert.equal(oversized.approvalBakeAllowed, false);
+        assert(issueCodes(oversized).has(PREFLIGHT_ISSUE_CODE.STEP_INPUT_LIMIT));
+        assert.equal(repeated.approvalModificationAllowed, false);
+        assert.equal(repeated.approvalBakeAllowed, false);
+        assert(issueCodes(repeated).has(PREFLIGHT_ISSUE_CODE.APPROVAL_STEP_LIMIT));
     }),
 
     it("WebMCPOperationPreflight: should approve a complete profiled Recipe after resource checks", () => {
@@ -190,12 +232,19 @@ TestRegister.addApiTests([
 
     it("WebMCPOperationPreflight: should apply action policy to the complete post-change Recipe", () => {
         const safePostflight = preflightOperationRecipe([operationStep("To Base64")]),
+            approvalPostflight = preflightOperationRecipe([
+                operationStep("Generate HOTP", ["Account", 6, 0]),
+            ], 32),
             blockedPostflight = preflightOperationRecipe([operationStep("Register")]),
             invalidPostflight = preflightOperationRecipe([operationStep("SECRET_OPERATION_CANARY")]);
 
         assert.deepStrictEqual(
             evaluateOperationMutation(MUTATION_ACTION.INSERT, "To Base64", safePostflight),
             {allowed: true, code: MUTATION_DECISION_CODE.ALLOWED}
+        );
+        assert.deepStrictEqual(
+            evaluateOperationMutation(MUTATION_ACTION.INSERT, "Generate HOTP", approvalPostflight),
+            {allowed: true, code: MUTATION_DECISION_CODE.ALLOWED, approvalRequired: true}
         );
         assert.deepStrictEqual(
             evaluateOperationMutation(MUTATION_ACTION.MOVE, "To Base64", blockedPostflight),

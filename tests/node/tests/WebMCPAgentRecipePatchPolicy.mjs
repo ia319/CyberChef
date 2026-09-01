@@ -24,6 +24,14 @@ TestRegister.addApiTests([
             {type: "insert", operation: "To Base32", arguments: ["A-Z2-7="]},
             {type: "disable", stepId: "recipe-step-1"},
         ]);
+        assert.deepStrictEqual(prepareAgentRecipeChanges([{
+            type: "insert",
+            operation: "Generate HOTP",
+        }]), [{
+            type: "insert",
+            operation: "Generate HOTP",
+            arguments: ["Account", 6, 0],
+        }]);
     }),
 
     it("WebMCPAgentRecipePatchPolicy: should reject missing profiles and invalid arguments", () => {
@@ -109,5 +117,54 @@ TestRegister.addApiTests([
         }, 32);
         assert.equal(blockedExecution.standardModificationAllowed, false);
         assert.equal(blockedExecution.agentBakeAllowed, false);
+    }),
+
+    it("WebMCPAgentRecipePatchPolicy: should derive a value-free HOTP approval summary", () => {
+        const nameCanary = "SECRET_ACCOUNT_CANARY",
+            approved = authorizeAgentRecipePatch({
+                steps: [{
+                    operation: {op: "Generate HOTP", args: [nameCanary, 8, 42]},
+                }],
+                actions: [{
+                    commandIndex: 0,
+                    type: "insert",
+                    operationName: "Generate HOTP",
+                }],
+            }, 32),
+            serialized = JSON.stringify(approved);
+
+        assert.equal(approved.approvalRequired, true);
+        assert.equal(approved.approvalModificationAllowed, true);
+        assert.equal(approved.approvalBakeAllowed, true);
+        assert.deepStrictEqual(approved.approvalSummary, {
+            operationNames: ["Generate HOTP"],
+            sensitiveParameterNames: ["Name"],
+            riskFlags: ["secretInput", "sensitiveOutput"],
+            changeTypes: ["insert"],
+        });
+        assert.equal(serialized.includes(nameCanary), false);
+        assert.equal(serialized.includes("42"), false);
+    }),
+
+    it("WebMCPAgentRecipePatchPolicy: should block invalid and repeated HOTP targets before approval", () => {
+        const createPatch = (steps, actionType="insert") => ({
+            steps,
+            actions: [{
+                commandIndex: 0,
+                type: actionType,
+                operationName: "Generate HOTP",
+            }],
+        });
+
+        assert.throws(() => authorizeAgentRecipePatch(createPatch([{
+            operation: {op: "Generate HOTP", args: ["Account", 9, 0]},
+        }]), 32), error => error instanceof RecipeTransactionError &&
+            error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED);
+        assert.throws(() => authorizeAgentRecipePatch(createPatch([{
+            operation: {op: "Generate HOTP", args: ["Account", 6, 0]},
+        }, {
+            operation: {op: "Generate HOTP", args: ["Second", 6, 1]},
+        }]), 32), error => error instanceof RecipeTransactionError &&
+            error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED);
     }),
 ]);

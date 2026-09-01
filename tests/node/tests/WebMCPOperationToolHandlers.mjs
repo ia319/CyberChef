@@ -119,6 +119,22 @@ TestRegister.addApiTests([
         assert.equal(witness.data.arguments[0].constraints.profileRule, "conditional");
     }),
 
+    it("WebMCPOperationToolHandlers: should distinguish HOTP approval from direct Bake access", async () => {
+        const result = await executeTool(
+            TOOL_CONTRACTS[TOOL_NAME.GET_OPERATION_DETAILS],
+            OPERATION_TOOL_HANDLERS[TOOL_NAME.GET_OPERATION_DETAILS],
+            {name: "Generate HOTP"}
+        );
+
+        assert.equal(result.ok, true);
+        assert.equal(result.data.reviewStatus, "constrained");
+        assert.equal(result.data.mutationPolicy, "userActionRequired");
+        assert.equal(result.data.agentBakePolicy, "userActionRequired");
+        assert.equal(result.data.agentBakeAllowed, false);
+        assert(result.data.supportedActions.includes("insert"));
+        assert.equal(result.data.arguments[0].constraints.maximumCodePoints, 128);
+    }),
+
     it("WebMCPOperationToolHandlers: should paginate large argument sets within the result budget", async () => {
         const result = await executeTool(
             TOOL_CONTRACTS[TOOL_NAME.GET_OPERATION_DETAILS],

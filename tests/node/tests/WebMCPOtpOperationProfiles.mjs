@@ -48,11 +48,16 @@ TestRegister.addApiTests([
         assert.equal(resolveOperationProfileArguments(profile, [nameCanary, 6, 1.5]).valid, false);
     }),
 
-    it("WebMCPOtpOperationProfiles: should not grant capability from a profile alone", () => {
+    it("WebMCPOtpOperationProfiles: should require one-use approval for HOTP", () => {
         const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Generate HOTP");
 
-        assert.equal(capability.reviewStatus, "unreviewed");
-        assert.equal(capability.mutationPolicy, "blocked");
-        assert.equal(capability.agentBakePolicy, "blocked");
+        assert.equal(capability.reviewStatus, "constrained");
+        assert.equal(capability.mutationPolicy, "userActionRequired");
+        assert.equal(capability.agentBakePolicy, "userActionRequired");
+        assert.equal(capability.nondeterministic, true);
+        assert.deepStrictEqual(capability.approvalSummary, {
+            sensitiveParameterNames: ["Name"],
+            riskFlags: ["secretInput", "sensitiveOutput"],
+        });
     }),
 ]);

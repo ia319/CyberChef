@@ -22,6 +22,7 @@ function createSearchItem(entry) {
         name: entry.name,
         reviewStatus: permissions.reviewStatus,
         supportedActions: permissions.supportedMutationActions,
+        mutationPolicy: permissions.mutationPolicy,
     };
 }
 
@@ -137,6 +138,8 @@ function createOperationToolHandlers(catalog=OPERATION_CATALOG) {
                 reviewStatus: permissions.reviewStatus,
                 supportedActions: permissions.supportedMutationActions,
                 agentBakeAllowed: permissions.agentBakeAllowed,
+                mutationPolicy: permissions.mutationPolicy,
+                agentBakePolicy: permissions.agentBakePolicy,
             };
         let argumentCount = requestedArguments.length,
             optionCount = requestedOptions.length,

@@ -9,6 +9,16 @@ import {
     resolveOperationProfileArguments,
 } from "./OperationProfiles.mjs";
 
+const APPROVAL_CHANGE_TYPES = Object.freeze({
+    insert: "insert",
+    setArgument: "update",
+    remove: "remove",
+    move: "move",
+    enable: "setDisabled",
+    disable: "setDisabled",
+    setBreakpoint: "setBreakpoint",
+});
+
 
 /**
  * Supplies reviewed defaults before the generic Recipe patch engine runs.
@@ -56,6 +66,7 @@ function authorizeAgentRecipePatch(patch, activeInputBytes=null) {
         disabled: step.operation.disabled === true,
     })), activeInputBytes);
 
+    let approvalRequired = false;
     for (const action of patch.actions) {
         const decision = evaluateOperationMutation(action.type, action.operationName, preflightResult);
         if (!decision.allowed) {
@@ -64,6 +75,21 @@ function authorizeAgentRecipePatch(patch, activeInputBytes=null) {
                 policyCode: decision.code,
             });
         }
+        if (decision.approvalRequired === true) approvalRequired = true;
+    }
+    if (approvalRequired) {
+        const changeTypes = [...new Set(patch.actions.map(action => APPROVAL_CHANGE_TYPES[action.type]))];
+        if (changeTypes.some(type => typeof type !== "string") || !preflightResult.approvalSummary) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED);
+        }
+        return Object.freeze({
+            ...preflightResult,
+            approvalRequired: true,
+            approvalSummary: Object.freeze({
+                ...preflightResult.approvalSummary,
+                changeTypes: Object.freeze(changeTypes),
+            }),
+        });
     }
     return preflightResult;
 }

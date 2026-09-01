@@ -1,6 +1,7 @@
 import {
     CAPABILITY_FIELDS,
     OPERATION_CAPABILITY_MANIFEST,
+    OPERATION_POLICY,
     REVIEW_STATUS,
 } from "./OperationCapabilityManifest.mjs";
 import {getOperationPermissions} from "./OperationPermissions.mjs";
@@ -16,6 +17,7 @@ import {
 
 const OPERATION_PREFLIGHT_VERSION = "1";
 const PREFLIGHT_MAX_REPORTED_ISSUES = 64;
+const APPROVAL_OPERATION_STEP_LIMIT = 1;
 
 const PREFLIGHT_ISSUE_CODE = Object.freeze({
     INVALID_RECIPE: "INVALID_RECIPE",
@@ -46,6 +48,7 @@ const PREFLIGHT_ISSUE_CODE = Object.freeze({
     PAGE_MUTATION: "PAGE_MUTATION",
     NONDETERMINISTIC: "NONDETERMINISTIC",
     TIME_DEPENDENT: "TIME_DEPENDENT",
+    APPROVAL_STEP_LIMIT: "APPROVAL_STEP_LIMIT",
 });
 
 const CAPABILITY_ISSUE_CODES = Object.freeze({
@@ -90,10 +93,16 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
     let issuesTruncated = false,
         recipeValid = Array.isArray(recipe),
         standardModificationAllowed = recipeValid,
+        approvalModificationAllowed = recipeValid,
+        approvalBakePolicyAllowed = recipeValid,
         resourceAllowed = activeInputBytes !== null,
         estimatedBytes = activeInputBytes,
         estimatedWorkBytes = 0,
-        dataToArgumentSeen = false;
+        dataToArgumentSeen = false,
+        approvalStepCount = 0;
+    const approvalOperationNames = new Set(),
+        approvalSensitiveParameterNames = new Set(),
+        approvalRiskFlags = new Set();
 
     /**
      * Adds one bounded issue without accepting user-controlled text.
@@ -132,6 +141,8 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
                 typeof step.operationName !== "string") {
                 recipeValid = false;
                 standardModificationAllowed = false;
+                approvalModificationAllowed = false;
+                approvalBakePolicyAllowed = false;
                 addIssue(PREFLIGHT_ISSUE_CODE.INVALID_RECIPE, stepIndex);
                 steps.push(Object.freeze({
                     stepIndex,
@@ -158,19 +169,37 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
             if (!capability) {
                 recipeValid = false;
                 standardModificationAllowed = false;
+                approvalModificationAllowed = false;
+                approvalBakePolicyAllowed = false;
                 addIssue(PREFLIGHT_ISSUE_CODE.UNKNOWN_OPERATION, stepIndex);
                 continue;
             }
             if (!enabled) continue;
 
+            const approvalMutation = capability.reviewStatus === REVIEW_STATUS.CONSTRAINED &&
+                    capability.mutationPolicy === OPERATION_POLICY.USER_ACTION_REQUIRED &&
+                    capability.approvalSummary,
+                approvalBake = approvalMutation &&
+                    capability.agentBakePolicy === OPERATION_POLICY.USER_ACTION_REQUIRED;
+
             if (capability.reviewStatus !== REVIEW_STATUS.SAFE) {
                 standardModificationAllowed = false;
+                if (!approvalMutation) approvalModificationAllowed = false;
+                if (!approvalBake) approvalBakePolicyAllowed = false;
                 const statusCode = capability.reviewStatus === REVIEW_STATUS.DENIED ?
                     PREFLIGHT_ISSUE_CODE.DENIED_OPERATION :
                     capability.reviewStatus === REVIEW_STATUS.CONSTRAINED ?
                         PREFLIGHT_ISSUE_CODE.CONSTRAINED_OPERATION :
                         PREFLIGHT_ISSUE_CODE.UNREVIEWED_OPERATION;
                 addIssue(statusCode, stepIndex);
+            }
+            if (approvalMutation) {
+                approvalStepCount++;
+                approvalOperationNames.add(step.operationName);
+                for (const name of capability.approvalSummary.sensitiveParameterNames) {
+                    approvalSensitiveParameterNames.add(name);
+                }
+                for (const flag of capability.approvalSummary.riskFlags) approvalRiskFlags.add(flag);
             }
 
             for (const field of CAPABILITY_FIELDS) {
@@ -189,6 +218,8 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
                     standardModificationAllowed = false;
                     addIssue(PREFLIGHT_ISSUE_CODE.PROFILE_REQUIRED, stepIndex);
                 }
+                approvalModificationAllowed = false;
+                approvalBakePolicyAllowed = false;
                 continue;
             }
 
@@ -196,6 +227,8 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
             if (!argumentResult.valid) {
                 recipeValid = false;
                 standardModificationAllowed = false;
+                approvalModificationAllowed = false;
+                approvalBakePolicyAllowed = false;
                 addIssue(PREFLIGHT_ISSUE_CODE.INVALID_ARGUMENTS, stepIndex);
                 continue;
             }
@@ -229,14 +262,32 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
         }
     }
 
+    if (approvalStepCount > APPROVAL_OPERATION_STEP_LIMIT) {
+        approvalModificationAllowed = false;
+        approvalBakePolicyAllowed = false;
+        addIssue(PREFLIGHT_ISSUE_CODE.APPROVAL_STEP_LIMIT);
+    }
+
     const resourceChecked = activeInputBytes !== null,
-        agentBakeAllowed = recipeValid && standardModificationAllowed && resourceChecked && resourceAllowed;
+        approvalRequired = approvalStepCount > 0,
+        agentBakeAllowed = recipeValid && standardModificationAllowed && resourceChecked && resourceAllowed,
+        approvalModification = recipeValid && approvalRequired && approvalModificationAllowed,
+        approvalBakeAllowed = approvalModification && approvalBakePolicyAllowed &&
+            resourceChecked && resourceAllowed;
 
     return Object.freeze({
         version: OPERATION_PREFLIGHT_VERSION,
         recipeValid,
         standardModificationAllowed: recipeValid && standardModificationAllowed,
         agentBakeAllowed,
+        approvalRequired,
+        approvalModificationAllowed: approvalModification,
+        approvalBakeAllowed,
+        approvalSummary: approvalRequired ? Object.freeze({
+            operationNames: Object.freeze([...approvalOperationNames]),
+            sensitiveParameterNames: Object.freeze([...approvalSensitiveParameterNames]),
+            riskFlags: Object.freeze([...approvalRiskFlags]),
+        }) : null,
         resourceChecked,
         resource: Object.freeze({
             activeInputBytes,
@@ -252,6 +303,7 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
 
 export {
     OPERATION_PREFLIGHT_VERSION,
+    APPROVAL_OPERATION_STEP_LIMIT,
     PREFLIGHT_ISSUE_CODE,
     PREFLIGHT_MAX_REPORTED_ISSUES,
     preflightOperationRecipe,

@@ -37,7 +37,10 @@ TestRegister.addApiTests([
                 operationNames: ["Generate HOTP"],
                 changeTypes: [APPROVAL_CHANGE_TYPE.INSERT],
                 sensitiveParameterNames: ["Secret"],
-                riskFlags: [APPROVAL_RISK_FLAG.SECRET_INPUT],
+                riskFlags: [
+                    APPROVAL_RISK_FLAG.SECRET_INPUT,
+                    APPROVAL_RISK_FLAG.SENSITIVE_OUTPUT,
+                ],
                 value: "SECRET_CANARY",
             }),
             serialized = JSON.stringify(summary);
@@ -46,7 +49,7 @@ TestRegister.addApiTests([
             operations: "Operations: Generate HOTP.",
             changes: "Requested Recipe effects: add an Operation.",
             parameters: "Values remain hidden. Sensitive parameters: Secret.",
-            risks: "Additional effects: process a sensitive parameter.",
+            risks: "Additional effects: process sensitive Input data and produce sensitive output.",
         });
         assert.equal(serialized.includes("SECRET_CANARY"), false);
     }),

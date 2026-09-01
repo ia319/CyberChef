@@ -97,6 +97,7 @@ TestRegister.addApiTests([
                 reviewedOn: "2026-08-30",
                 sensitiveArguments: [],
                 resourceLimits: linearResourceLimits(1),
+                approvalSummary: null,
                 mutationPolicy: OPERATION_POLICY.ALLOWED,
                 agentBakePolicy: OPERATION_POLICY.ALLOWED,
             },
@@ -165,6 +166,26 @@ TestRegister.addApiTests([
         }
     }),
 
+    it("WebMCPOperationCapabilityManifest: should bind HOTP to a redacted approval policy", () => {
+        const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability("Generate HOTP");
+
+        assert.equal(capability.reviewStatus, REVIEW_STATUS.CONSTRAINED);
+        assert.equal(capability.mutationPolicy, OPERATION_POLICY.USER_ACTION_REQUIRED);
+        assert.equal(capability.agentBakePolicy, OPERATION_POLICY.USER_ACTION_REQUIRED);
+        assert.equal(capability.nondeterministic, true);
+        assert.deepStrictEqual(capability.riskCodes, [
+            "SECRET_INPUT",
+            "SENSITIVE_OUTPUT",
+            "NONDETERMINISTIC_OUTPUT",
+        ]);
+        assert.deepStrictEqual(capability.sensitiveArguments, [0]);
+        assert.deepStrictEqual(capability.approvalSummary, {
+            sensitiveParameterNames: ["Name"],
+            riskFlags: ["secretInput", "sensitiveOutput"],
+        });
+        assert.equal(Object.isFrozen(capability.approvalSummary), true);
+    }),
+
     it("WebMCPOperationCapabilityManifest: should preserve explicit review counts", () => {
         const counts = Object.fromEntries(Object.values(REVIEW_STATUS).map(status => [status, 0]));
         for (const operationName of OPERATION_CAPABILITY_MANIFEST.getOperationNames()) {
@@ -173,9 +194,9 @@ TestRegister.addApiTests([
 
         assert.deepStrictEqual(counts, {
             safe: 21,
-            constrained: 0,
+            constrained: 1,
             denied: 9,
-            unreviewed: 474,
+            unreviewed: 473,
         });
     }),
 
@@ -209,6 +230,7 @@ TestRegister.addApiTests([
                 reviewedOn: "2026-08-30",
                 sensitiveArguments: null,
                 resourceLimits: null,
+                approvalSummary: null,
                 mutationPolicy: OPERATION_POLICY.BLOCKED,
                 agentBakePolicy: OPERATION_POLICY.BLOCKED,
             };
@@ -218,6 +240,18 @@ TestRegister.addApiTests([
         assert.throws(() => createOperationCapabilityManifest(catalog, [{
             ...policy,
             capabilities: {netwrok: true},
+        }]), TypeError);
+        assert.throws(() => createOperationCapabilityManifest(catalog, [{
+            ...policy,
+            reviewStatus: REVIEW_STATUS.CONSTRAINED,
+            sensitiveArguments: [],
+            resourceLimits: linearResourceLimits(1),
+            approvalSummary: {
+                sensitiveParameterNames: ["Name"],
+                riskFlags: ["unknownRisk"],
+            },
+            mutationPolicy: OPERATION_POLICY.USER_ACTION_REQUIRED,
+            agentBakePolicy: OPERATION_POLICY.USER_ACTION_REQUIRED,
         }]), TypeError);
     }),
 ]);

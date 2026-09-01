@@ -1,5 +1,9 @@
 import { OPERATION_CATALOG } from "./OperationCatalog.mjs";
-import {STANDARD_OPERATION_PROFILES} from "./OperationProfiles.mjs";
+import {
+    APPROVAL_OPERATION_PROFILES,
+    STANDARD_OPERATION_PROFILES,
+} from "./OperationProfiles.mjs";
+import {OTP_OPERATION_APPROVAL_CONFIGS} from "./OtpOperationProfiles.mjs";
 import { isOperationResourceLimits } from "./OperationResourcePolicy.mjs";
 
 const REVIEW_STATUS = Object.freeze({
@@ -41,6 +45,14 @@ const CATALOG_DERIVED_CAPABILITY_FIELDS = new Set([
 ]);
 const CAPABILITY_FIELD_SET = new Set(CAPABILITY_FIELDS);
 const REVIEW_STATUS_SET = new Set(Object.values(REVIEW_STATUS));
+const APPROVAL_RISK_FLAGS = new Set([
+    "secretInput",
+    "sensitiveOutput",
+    "networkAccess",
+    "richContent",
+    "resourceIntensive",
+    "browserSideEffect",
+]);
 const UNREVIEWED_RISK_CODES = Object.freeze(["UNREVIEWED_OPERATION"]);
 const NO_EVIDENCE = Object.freeze([]);
 
@@ -65,6 +77,7 @@ function blockedPolicy(operationName, reviewStatus, capabilities, riskCodes, evi
         reviewedOn: "2026-08-30",
         sensitiveArguments: null,
         resourceLimits: null,
+        approvalSummary: null,
         mutationPolicy: OPERATION_POLICY.BLOCKED,
         agentBakePolicy: OPERATION_POLICY.BLOCKED,
     });
@@ -88,9 +101,72 @@ function allowedPolicy(profile) {
         reviewedOn: profile.reviewedOn,
         sensitiveArguments: profile.sensitiveArgumentIndexes,
         resourceLimits: profile.resourceLimits,
+        approvalSummary: null,
         mutationPolicy: OPERATION_POLICY.ALLOWED,
         agentBakePolicy: OPERATION_POLICY.ALLOWED,
     });
+}
+
+
+/**
+ * Creates one policy whose reviewed technical boundary still requires page approval.
+ *
+ * @param {Object} profile - Reviewed Operation profile.
+ * @param {Object} config - Static capabilities and redacted approval labels.
+ * @returns {Object} One-use approval policy record.
+ */
+function approvalPolicy(profile, config) {
+    if (!profile || !config || profile.operationName !== config.operationName ||
+        !config.capabilities || !Array.isArray(config.riskCodes) ||
+        !Array.isArray(config.sensitiveParameterNames) ||
+        !Array.isArray(config.riskFlags)) {
+        throw new TypeError("Approval Operation policy is invalid");
+    }
+    return Object.freeze({
+        operationName: profile.operationName,
+        reviewStatus: REVIEW_STATUS.CONSTRAINED,
+        capabilities: Object.freeze({...config.capabilities}),
+        riskCodes: Object.freeze([...config.riskCodes]),
+        evidence: profile.evidence,
+        reviewedOn: profile.reviewedOn,
+        sensitiveArguments: profile.sensitiveArgumentIndexes,
+        resourceLimits: profile.resourceLimits,
+        approvalSummary: Object.freeze({
+            sensitiveParameterNames: Object.freeze([...config.sensitiveParameterNames]),
+            riskFlags: Object.freeze([...config.riskFlags]),
+        }),
+        mutationPolicy: OPERATION_POLICY.USER_ACTION_REQUIRED,
+        agentBakePolicy: OPERATION_POLICY.USER_ACTION_REQUIRED,
+    });
+}
+
+
+/**
+ * Validates the fixed, value-free labels used by the page approval interface.
+ *
+ * @param {*} summary - Candidate approval summary policy.
+ * @returns {boolean} Whether the summary is a closed static record.
+ */
+function isApprovalSummaryPolicy(summary) {
+    if (!summary || typeof summary !== "object" || Array.isArray(summary)) return false;
+    const descriptors = Object.getOwnPropertyDescriptors(summary),
+        keys = Reflect.ownKeys(descriptors);
+    if ((Object.getPrototypeOf(summary) !== Object.prototype &&
+        Object.getPrototypeOf(summary) !== null) || keys.length !== 2 ||
+        keys.some(key => typeof key !== "string" ||
+            !["sensitiveParameterNames", "riskFlags"].includes(key) ||
+            !descriptors[key].enumerable || !("value" in descriptors[key]))) {
+        return false;
+    }
+    const names = summary.sensitiveParameterNames,
+        risks = summary.riskFlags;
+    return Array.isArray(names) && names.length <= 32 &&
+        names.every(name => typeof name === "string" && name.length > 0 && name.length <= 80 &&
+            !/[\u0000-\u001f\u007f]/u.test(name)) &&
+        new Set(names).size === names.length && Array.isArray(risks) &&
+        risks.length > 0 && risks.length <= APPROVAL_RISK_FLAGS.size &&
+        risks.every(risk => APPROVAL_RISK_FLAGS.has(risk)) &&
+        new Set(risks).size === risks.length;
 }
 
 const DENIED_OPERATION_POLICIES = Object.freeze([
@@ -173,10 +249,22 @@ const KNOWN_RISK_OPERATION_POLICIES = Object.freeze([
     ]),
 ]);
 
+const APPROVAL_CONFIGS_BY_NAME = new Map(
+    OTP_OPERATION_APPROVAL_CONFIGS.map(config => [config.operationName, config])
+);
+if (APPROVAL_CONFIGS_BY_NAME.size !== OTP_OPERATION_APPROVAL_CONFIGS.length ||
+    APPROVAL_CONFIGS_BY_NAME.size !== APPROVAL_OPERATION_PROFILES.length) {
+    throw new RangeError("Approval Operation policy configuration is incomplete");
+}
+const APPROVAL_OPERATION_POLICIES = Object.freeze(APPROVAL_OPERATION_PROFILES.map(profile =>
+    approvalPolicy(profile, APPROVAL_CONFIGS_BY_NAME.get(profile.operationName))
+));
+
 const REVIEWED_OPERATION_POLICIES = Object.freeze([
     ...DENIED_OPERATION_POLICIES,
     ...KNOWN_RISK_OPERATION_POLICIES,
     ...STANDARD_OPERATION_PROFILES.map(allowedPolicy),
+    ...APPROVAL_OPERATION_POLICIES,
 ]);
 
 
@@ -198,11 +286,17 @@ function createOperationCapabilityManifest(
             !catalog.getOperation(policy.operationName)) {
             throw new RangeError("Reviewed capability policy references an unknown Operation");
         }
+        const requiresApproval = policy.mutationPolicy === OPERATION_POLICY.USER_ACTION_REQUIRED ||
+            policy.agentBakePolicy === OPERATION_POLICY.USER_ACTION_REQUIRED;
         if (!REVIEW_STATUS_SET.has(policy.reviewStatus) || !policy.capabilities ||
             typeof policy.capabilities !== "object" || Array.isArray(policy.capabilities) ||
             !Array.isArray(policy.riskCodes) || !Array.isArray(policy.evidence) ||
             !(policy.sensitiveArguments === null || Array.isArray(policy.sensitiveArguments)) ||
             !(policy.resourceLimits === null || isOperationResourceLimits(policy.resourceLimits)) ||
+            !(policy.approvalSummary === null || isApprovalSummaryPolicy(policy.approvalSummary)) ||
+            requiresApproval !== (policy.approvalSummary !== null) ||
+            requiresApproval && (policy.reviewStatus !== REVIEW_STATUS.CONSTRAINED ||
+                !policy.resourceLimits || !Array.isArray(policy.sensitiveArguments)) ||
             !Object.values(OPERATION_POLICY).includes(policy.mutationPolicy) ||
             !Object.values(OPERATION_POLICY).includes(policy.agentBakePolicy) ||
             policy.riskCodes.some(code => typeof code !== "string") ||
@@ -242,6 +336,12 @@ function createOperationCapabilityManifest(
                 sensitiveArguments: reviewed && Array.isArray(reviewed.sensitiveArguments) ?
                     Object.freeze([...reviewed.sensitiveArguments]) : null,
                 resourceLimits: reviewed?.resourceLimits ? Object.freeze({...reviewed.resourceLimits}) : null,
+                approvalSummary: reviewed?.approvalSummary ? Object.freeze({
+                    sensitiveParameterNames: Object.freeze([
+                        ...reviewed.approvalSummary.sensitiveParameterNames,
+                    ]),
+                    riskFlags: Object.freeze([...reviewed.approvalSummary.riskFlags]),
+                }) : null,
                 mutationPolicy: reviewed?.mutationPolicy ?? OPERATION_POLICY.BLOCKED,
                 agentBakePolicy: reviewed?.agentBakePolicy ?? OPERATION_POLICY.BLOCKED,
                 riskCodes: Object.freeze([...(reviewed?.riskCodes ?? UNREVIEWED_RISK_CODES)]),
@@ -284,6 +384,7 @@ export {
     CAPABILITY_FIELDS,
     OPERATION_CAPABILITY_MANIFEST,
     OPERATION_POLICY,
+    APPROVAL_OPERATION_POLICIES,
     REVIEWED_OPERATION_POLICIES,
     REVIEW_STATUS,
     createOperationCapabilityManifest,

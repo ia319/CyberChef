@@ -24,4 +24,21 @@ const OTP_OPERATION_PROFILE_CONFIGS = Object.freeze([
     }),
 ]);
 
-export {OTP_OPERATION_PROFILE_CONFIGS};
+const OTP_OPERATION_APPROVAL_CONFIGS = Object.freeze([
+    Object.freeze({
+        operationName: "Generate HOTP",
+        capabilities: Object.freeze({nondeterministic: true}),
+        riskCodes: Object.freeze([
+            "SECRET_INPUT",
+            "SENSITIVE_OUTPUT",
+            "NONDETERMINISTIC_OUTPUT",
+        ]),
+        sensitiveParameterNames: Object.freeze(["Name"]),
+        riskFlags: Object.freeze(["secretInput", "sensitiveOutput"]),
+    }),
+]);
+
+export {
+    OTP_OPERATION_APPROVAL_CONFIGS,
+    OTP_OPERATION_PROFILE_CONFIGS,
+};

@@ -43,18 +43,26 @@ const UNKNOWN_OPERATION_PERMISSIONS = Object.freeze({
     reviewStatus: null,
     supportedMutationActions: Object.freeze([]),
     agentBakeAllowed: false,
+    mutationPolicy: OPERATION_POLICY.BLOCKED,
+    agentBakePolicy: OPERATION_POLICY.BLOCKED,
 });
 
 const PERMISSIONS_BY_NAME = new Map(OPERATION_CAPABILITY_MANIFEST.getOperationNames().map(operationName => {
     const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName),
         profile = getOperationProfile(operationName),
-        safe = capability.reviewStatus === REVIEW_STATUS.SAFE && !!profile &&
+        standard = capability.reviewStatus === REVIEW_STATUS.SAFE && !!profile &&
             capability.mutationPolicy === OPERATION_POLICY.ALLOWED,
+        approval = capability.reviewStatus === REVIEW_STATUS.CONSTRAINED && !!profile &&
+            capability.mutationPolicy === OPERATION_POLICY.USER_ACTION_REQUIRED &&
+            capability.agentBakePolicy === OPERATION_POLICY.USER_ACTION_REQUIRED,
         permissions = Object.freeze({
             discoverable: true,
             reviewStatus: capability.reviewStatus,
-            supportedMutationActions: safe ? SAFE_MUTATION_ACTIONS : REDUCTION_MUTATION_ACTIONS,
-            agentBakeAllowed: safe && capability.agentBakePolicy === OPERATION_POLICY.ALLOWED,
+            supportedMutationActions: standard || approval ?
+                SAFE_MUTATION_ACTIONS : REDUCTION_MUTATION_ACTIONS,
+            agentBakeAllowed: standard && capability.agentBakePolicy === OPERATION_POLICY.ALLOWED,
+            mutationPolicy: capability.mutationPolicy,
+            agentBakePolicy: capability.agentBakePolicy,
         });
     return [operationName, permissions];
 }));
@@ -98,6 +106,13 @@ function evaluateOperationMutation(action, operationName, postflight) {
         return Object.freeze({allowed: false, code: MUTATION_DECISION_CODE.ACTION_BLOCKED});
     }
     if (!postflight.standardModificationAllowed) {
+        if (postflight.approvalModificationAllowed === true) {
+            return Object.freeze({
+                allowed: true,
+                code: MUTATION_DECISION_CODE.ALLOWED,
+                approvalRequired: true,
+            });
+        }
         return Object.freeze({allowed: false, code: MUTATION_DECISION_CODE.RECIPE_BLOCKED});
     }
     return Object.freeze({allowed: true, code: MUTATION_DECISION_CODE.ALLOWED});
