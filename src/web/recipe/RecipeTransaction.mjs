@@ -98,6 +98,7 @@ class RecipeTransaction {
     #nextChangeNumber;
     #agentRevertSnapshot;
     #agentRevertReason;
+    #preparedAgentPatches;
 
     /**
      * Creates a Recipe transaction owner.
@@ -119,6 +120,7 @@ class RecipeTransaction {
         this.#nextChangeNumber = 0;
         this.#agentRevertSnapshot = null;
         this.#agentRevertReason = RECIPE_REVERT_REASON.NO_AGENT_CHANGE;
+        this.#preparedAgentPatches = new WeakMap();
     }
 
 
@@ -352,14 +354,14 @@ class RecipeTransaction {
 
 
     /**
-     * Applies one authorized Agent patch as a synchronous transaction.
+     * Validates and authorizes one Agent patch without changing the model or visible Recipe.
      *
      * @param {Object} input - Detached patch request with an expected revision and changes.
      * @param {Object} policy - Synchronous Agent change preparation and authorization policy.
-     * @returns {Object} Immutable transaction result without Recipe arguments.
-     * @throws {RecipeTransactionError} When validation, policy, revision, or projection fails.
+     * @returns {Object} One-use prepared patch with its content-free authorization result.
+     * @throws {RecipeTransactionError} When validation, policy, or revision checks fail.
      */
-    applyAgentPatch(input, policy) {
+    prepareAgentPatch(input, policy) {
         if (!input || !Number.isSafeInteger(input.expectedRevision) ||
             !Array.isArray(input.changes) || !policy ||
             typeof policy.prepareChanges !== "function" ||
@@ -399,14 +401,46 @@ class RecipeTransaction {
             throw err;
         }
 
-        policy.authorizePatch(patch);
+        const authorization = policy.authorizePatch(patch);
 
         if (this.#model.getSnapshot().recipeRevision !== input.expectedRevision) {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
         }
 
         const newStepIds = patch.insertedSteps.map(item => item.stepId),
-            preparedModel = this.#model.prepareProjectedSteps(patch.steps, newStepIds);
+            preparedModel = this.#model.prepareProjectedSteps(patch.steps, newStepIds),
+            preparedPatch = Object.freeze({
+                expectedRevision: input.expectedRevision,
+                authorization,
+            });
+        this.#preparedAgentPatches.set(preparedPatch, {
+            snapshot,
+            patch,
+            preparedModel,
+            draftStepNumber,
+        });
+        return preparedPatch;
+    }
+
+
+    /**
+     * Commits one prepared Agent patch exactly once.
+     *
+     * @param {Object} preparedPatch - One-use value returned by prepareAgentPatch().
+     * @returns {Object} Immutable transaction result without Recipe arguments.
+     * @throws {RecipeTransactionError} When the prepared patch is invalid, stale, or cannot publish.
+     */
+    commitAgentPatch(preparedPatch) {
+        const prepared = this.#preparedAgentPatches.get(preparedPatch);
+        if (!prepared) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH);
+        }
+        this.#preparedAgentPatches.delete(preparedPatch);
+        if (this.#model.getSnapshot().recipeRevision !== preparedPatch.expectedRevision) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE);
+        }
+
+        const {snapshot, patch, preparedModel, draftStepNumber} = prepared;
         const result = this.#publishPreparedModel(
             preparedModel,
             snapshot,
@@ -426,6 +460,19 @@ class RecipeTransaction {
             this.#agentRevertReason = null;
         }
         return result;
+    }
+
+
+    /**
+     * Applies one authorized Agent patch as a synchronous transaction.
+     *
+     * @param {Object} input - Detached patch request with an expected revision and changes.
+     * @param {Object} policy - Synchronous Agent change preparation and authorization policy.
+     * @returns {Object} Immutable transaction result without Recipe arguments.
+     * @throws {RecipeTransactionError} When validation, policy, revision, or projection fails.
+     */
+    applyAgentPatch(input, policy) {
+        return this.commitAgentPatch(this.prepareAgentPatch(input, policy));
     }
 }
 
