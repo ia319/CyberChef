@@ -20,6 +20,7 @@ import TabWaiter from "./waiters/TabWaiter.mjs";
 import TimingWaiter from "./waiters/TimingWaiter.mjs";
 import WebMCPWaiter from "./waiters/WebMCPWaiter.mjs";
 import CollaborationWaiter from "./waiters/CollaborationWaiter.mjs";
+import ApprovalWaiter from "./waiters/ApprovalWaiter.mjs";
 import {ACTIVE_BUILD_PROFILE} from "./webmcp/BuildProfiles.mjs";
 import {AGENT_RECIPE_PATCH_POLICY} from "./webmcp/AgentRecipePatchPolicy.mjs";
 import {OPERATION_TOOL_HANDLERS} from "./webmcp/OperationToolHandlers.mjs";
@@ -32,6 +33,11 @@ import {TOOL_NAME} from "./webmcp/ToolDefinitions.mjs";
 import {RunTargetBuilder} from "./run/RunTargetBuilder.mjs";
 import {RunCoordinator} from "./run/RunCoordinator.mjs";
 import {AnalysisCoordinator} from "./analysis/AnalysisCoordinator.mjs";
+import {
+    APPROVAL_END_REASON,
+    ApprovalCoordinator,
+} from "./webmcp/ApprovalCoordinator.mjs";
+import {COLLABORATION_SESSION_STATE} from "./webmcp/CollaborationSession.mjs";
 
 
 /**
@@ -104,6 +110,7 @@ class Manager {
         this.background  = new BackgroundWorkerWaiter(this.app, this);
         this.agentBake   = new AgentBakeService(this.app, this);
         this.agentAnalysis = new AgentAnalysisService(this);
+        this.approvals   = new ApprovalCoordinator();
         const runStateService = ACTIVE_BUILD_PROFILE.toolNames.includes(TOOL_NAME.BAKE_RECIPE) ?
             this.agentBake : null;
         this.webmcp      = new WebMCPWaiter(
@@ -123,6 +130,19 @@ class Manager {
             this.webmcp.session,
             this.webmcp.buildProfile
         );
+        this.approval = new ApprovalWaiter(
+            this,
+            this.webmcp.session,
+            this.approvals
+        );
+        this.webmcp.session.addEventListener("change", () => {
+            if (this.webmcp.session.getState().state !== COLLABORATION_SESSION_STATE.ACTIVE) {
+                this.approvals.invalidate(APPROVAL_END_REASON.SESSION_ENDED);
+            }
+        });
+        window.addEventListener("pagehide", () => {
+            this.approvals.invalidate(APPROVAL_END_REASON.PAGE_LIFECYCLE);
+        });
 
         // Object to store dynamic handlers to fire on elements that may not exist yet
         this.dynamicHandlers = {};
@@ -146,6 +166,7 @@ class Manager {
         this.seasonal.load();
         this.webmcp.setup();
         this.collaboration.setup();
+        this.approval.setup();
 
         this.confirmWaitersLoaded();
     }

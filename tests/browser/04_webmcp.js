@@ -172,6 +172,107 @@ module.exports = {
         browser.assert.deepStrictEqual(refreshed.toolNames, secondaryInitial.toolNames);
     },
 
+    "One-use approval choices remain visible and page scoped": browser => {
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            try {
+                const manager = window.app.manager,
+                    sessionEpoch = manager.webmcp.session.getState().sessionEpoch,
+                    request = await manager.approvals.requestApproval({
+                        sessionEpoch,
+                        action: {
+                            expectedRevision: 7,
+                            operation: "Generate HOTP",
+                            args: {Secret: "APPROVAL_SECRET_CANARY", Counter: 1},
+                        },
+                        summary: {
+                            operationNames: ["Generate HOTP"],
+                            changeTypes: ["insert"],
+                            sensitiveParameterNames: ["Secret"],
+                            riskFlags: ["secretInput"],
+                        },
+                    });
+                done({request, activeElementId: document.activeElement.id});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.request.state, "pending");
+            browser.assert.strictEqual(value.activeElementId, "webmcp-approval");
+        });
+
+        browser.expect.element("#webmcp-approval").to.be.visible;
+        browser.expect.element("#webmcp-approval").attribute("aria-describedby")
+            .to.equal("webmcp-approval-effect");
+        browser.expect.element("#webmcp-approval-operations").text.to.equal(
+            "Operations: Generate HOTP."
+        );
+        browser.expect.element("#webmcp-approval-parameters").text.to.equal(
+            "Values remain hidden. Sensitive parameters: Secret."
+        );
+        browser.expect.element("#webmcp-approval-effect").text.to.contain(
+            "Recipe-only approval leaves the current Output stale"
+        );
+        browser.execute(() => document.getElementById("webmcp-approval").textContent,
+            [], ({value}) => {
+                browser.assert.strictEqual(value.includes("APPROVAL_SECRET_CANARY"), false);
+            });
+
+        browser.sendKeys("#webmcp-approve-recipe", browser.Keys.ENTER);
+        browser.execute(() => ({
+            approval: window.app.manager.approvals.getState(),
+            activeElementId: document.activeElement.id,
+        }), [], ({value}) => {
+            browser.assert.strictEqual(value.approval.state, "approved");
+            browser.assert.strictEqual(value.approval.mode, "recipeOnly");
+            browser.assert.strictEqual(value.activeElementId, "webmcp-stop");
+        });
+        browser.expect.element("#webmcp-approve-recipe").to.not.be.visible;
+        browser.expect.element("#webmcp-reject-approval").text.to.equal("CANCEL APPROVAL");
+        browser.expect.element("#webmcp-live-status").text.to.equal(
+            "WebMCP Recipe change approved without a Bake."
+        );
+
+        browser.sendKeys("#webmcp-reject-approval", browser.Keys.ENTER);
+        browser.expect.element("#webmcp-approval").to.not.be.visible;
+        browser.expect.element("#webmcp-live-status").text.to.equal(
+            "The WebMCP approval was cancelled."
+        );
+
+        browser.executeAsync(async done => {
+            const manager = window.app.manager,
+                sessionEpoch = manager.webmcp.session.getState().sessionEpoch;
+            try {
+                const request = await manager.approvals.requestApproval({
+                    sessionEpoch,
+                    action: {operation: "Generate HOTP", args: {Secret: "SECOND_CANARY"}},
+                    summary: {
+                        operationNames: ["Generate HOTP"],
+                        changeTypes: ["insert"],
+                        sensitiveParameterNames: ["Secret"],
+                        riskFlags: ["secretInput"],
+                    },
+                });
+                done({requestId: request.requestId});
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            }
+        });
+        browser.sendKeys("#webmcp-approve-bake", browser.Keys.ENTER);
+        browser.execute(() => window.app.manager.approvals.getState(), [], ({value}) => {
+            browser.assert.strictEqual(value.state, "approved");
+            browser.assert.strictEqual(value.mode, "recipeAndBake");
+        });
+
+        browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
+        browser.execute(() => window.app.manager.approvals.getState(), [], ({value}) => {
+            browser.assert.strictEqual(value.state, "cancelled");
+            browser.assert.strictEqual(value.endReason, "sessionEnded");
+        });
+        browser.expect.element("#webmcp-approval").to.not.be.visible;
+    },
+
     "Recipe tools support a real discovery and collaboration flow": browser => {
         browser.executeAsync(async done => {
             try {

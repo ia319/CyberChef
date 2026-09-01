@@ -236,6 +236,19 @@
                             <p class="webmcp-copy">Tool results exclude raw Input and Output, current Recipe argument values, Comments, Registers, and Magic previews. The browser host can still observe content visible on this page. Stopping access keeps Recipe changes already applied.</p>
                             <p id="webmcp-change-summary" class="webmcp-change-summary">No WebMCP Recipe change has been applied on this page.</p>
                             <p id="webmcp-revert-state" class="webmcp-revert-state">No WebMCP Recipe change is available to restore.</p>
+                            <section id="webmcp-approval" class="webmcp-approval" tabindex="-1" hidden aria-labelledby="webmcp-approval-heading" aria-describedby="webmcp-approval-effect">
+                                <strong id="webmcp-approval-heading">WebMCP action approval</strong>
+                                <p id="webmcp-approval-operations" class="webmcp-approval-detail"></p>
+                                <p id="webmcp-approval-changes" class="webmcp-approval-detail"></p>
+                                <p id="webmcp-approval-parameters" class="webmcp-approval-detail"></p>
+                                <p id="webmcp-approval-risks" class="webmcp-approval-detail"></p>
+                                <p id="webmcp-approval-effect" class="webmcp-approval-effect"></p>
+                                <div class="webmcp-approval-actions" role="group" aria-label="WebMCP approval choices">
+                                    <button type="button" class="btn btn-sm btn-primary" id="webmcp-approve-recipe">Apply Recipe change</button>
+                                    <button type="button" class="btn btn-sm btn-primary" id="webmcp-approve-bake">Apply and Bake once</button>
+                                    <button type="button" class="btn btn-sm btn-secondary" id="webmcp-reject-approval">Reject</button>
+                                </div>
+                            </section>
                             <p id="webmcp-live-status" class="webmcp-live-status" role="status" aria-live="polite" aria-atomic="true">WebMCP Recipe access is off.</p>
                         </section>
                     </div>
