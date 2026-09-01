@@ -157,6 +157,7 @@ TestRegister.addApiTests([
             "From Hex",
             "From Hexdump",
             "From Octal",
+            "From Punycode",
             "From Quoted Printable",
             "Normalise Unicode",
             "ROT13",
@@ -178,6 +179,7 @@ TestRegister.addApiTests([
             "To Hex",
             "To Hexdump",
             "To Octal",
+            "To Punycode",
             "To Quoted Printable",
             "URL Decode",
             "URL Encode",
@@ -219,10 +221,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 47,
+            safe: 49,
             constrained: 1,
             denied: 9,
-            unreviewed: 447,
+            unreviewed: 445,
         });
     }),
 
