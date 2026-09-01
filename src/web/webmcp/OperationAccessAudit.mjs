@@ -546,6 +546,16 @@ const OPERATION_ACCESS_AUDIT = Object.freeze({
     size: auditedNames.length,
 
     /**
+     * Reports whether an exact Operation name has an explicit access decision.
+     *
+     * @param {string} operationName - Exact Operation name.
+     * @returns {boolean} Whether the name is present in the audit.
+     */
+    hasOperation(operationName) {
+        return accessByName.has(operationName);
+    },
+
+    /**
      * Returns the reviewed access class for one exact Operation name.
      *
      * @param {string} operationName - Exact Operation name.

@@ -56,7 +56,7 @@ import "./tests/WebMCPAgentBakeService.mjs";
 import "./tests/WebMCPAgentAnalysisService.mjs";
 import "./tests/WebMCPOutputAnalysisSerializer.mjs";
 import "./tests/WebMCPInspectOutputToolHandlers.mjs";
-import "./tests/WebMCPOperationCapabilityManifest.mjs";
+import "./tests/WebMCPOperationAccessAudit.mjs";
 import "./tests/WebMCPOperationIngredients.mjs";
 import "./tests/WebMCPOperationApprovalPolicy.mjs";
 import "./tests/WebMCPApprovalCoordinator.mjs";

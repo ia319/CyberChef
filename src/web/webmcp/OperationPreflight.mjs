@@ -1,7 +1,12 @@
-import {OPERATION_ACCESS} from "./OperationAccessAudit.mjs";
-import {resolveOperationArguments} from "./OperationArguments.mjs";
+import {
+    OPERATION_ACCESS,
+    OPERATION_ACCESS_AUDIT,
+} from "./OperationAccessAudit.mjs";
+import {
+    OPERATION_ARGUMENT_ERROR_CODE,
+    resolveOperationArguments,
+} from "./OperationArguments.mjs";
 import {OPERATION_APPROVAL_POLICY} from "./OperationApprovalPolicy.mjs";
-import {OPERATION_CAPABILITY_MANIFEST} from "./OperationCapabilityManifest.mjs";
 import {getOperationPermissions} from "./OperationPermissions.mjs";
 
 const OPERATION_PREFLIGHT_VERSION = "2";
@@ -66,11 +71,17 @@ function preflightOperationRecipe(recipe) {
                 continue;
             }
 
-            const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(step.operationName),
-                permissions = getOperationPermissions(step.operationName),
+            const permissions = getOperationPermissions(step.operationName),
                 enabled = step.disabled !== true;
 
-            if (!capability) {
+            if (!OPERATION_ACCESS_AUDIT.hasOperation(step.operationName)) {
+                const argumentResult = resolveOperationArguments(step.operationName, step.arguments);
+                if (argumentResult.code !== OPERATION_ARGUMENT_ERROR_CODE.UNKNOWN_OPERATION) {
+                    standardModificationAllowed = false;
+                    approvalModificationAllowed = false;
+                    addIssue(PREFLIGHT_ISSUE_CODE.UNREVIEWED_OPERATION, stepIndex);
+                    continue;
+                }
                 recipeValid = false;
                 standardModificationAllowed = false;
                 approvalModificationAllowed = false;

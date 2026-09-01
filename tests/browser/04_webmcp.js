@@ -404,7 +404,7 @@ module.exports = {
         }, [], ({value}) => {
             browser.assert.strictEqual(value.scriptError, undefined);
             browser.assert.strictEqual(value.details.ok, true);
-            browser.assert.strictEqual(value.details.data.reviewStatus, "constrained");
+            browser.assert.strictEqual(value.details.data.operationAccess, "approval");
             browser.assert.strictEqual(value.details.data.mutationPolicy, "userActionRequired");
             browser.assert.strictEqual(value.details.data.agentBakePolicy, "userActionRequired");
             browser.assert.strictEqual(value.pending.error.code, "USER_ACTION_REQUIRED");
@@ -422,7 +422,7 @@ module.exports = {
             "Operations: Generate HOTP."
         );
         browser.expect.element("#webmcp-approval-parameters").text.to.equal(
-            "Values remain hidden. Sensitive parameters: Name."
+            "Parameter values remain hidden."
         );
         browser.expect.element("#webmcp-approval-risks").text.to.contain(
             "process sensitive Input data"

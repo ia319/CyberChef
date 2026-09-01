@@ -33,7 +33,6 @@ TestRegister.addApiTests([
         assert.deepStrictEqual(getOperationPermissions("To Base64"), {
             discoverable: true,
             operationAccess: "direct",
-            reviewStatus: "safe",
             supportedMutationActions: ALL_MUTATION_ACTIONS,
             agentBakeAllowed: true,
             mutationPolicy: "allowed",
@@ -42,7 +41,6 @@ TestRegister.addApiTests([
         assert.deepStrictEqual(getOperationPermissions("HTTP request"), {
             discoverable: true,
             operationAccess: "approval",
-            reviewStatus: "constrained",
             supportedMutationActions: ALL_MUTATION_ACTIONS,
             agentBakeAllowed: false,
             mutationPolicy: "userActionRequired",
@@ -51,7 +49,6 @@ TestRegister.addApiTests([
         assert.deepStrictEqual(getOperationPermissions("Magic"), {
             discoverable: true,
             operationAccess: "blocked",
-            reviewStatus: "denied",
             supportedMutationActions: REDUCTION_MUTATION_ACTIONS,
             agentBakeAllowed: false,
             mutationPolicy: "blocked",
@@ -60,7 +57,6 @@ TestRegister.addApiTests([
         assert.deepStrictEqual(getOperationPermissions("Automated Validation Test Op"), {
             discoverable: false,
             operationAccess: "excluded",
-            reviewStatus: "unreviewed",
             supportedMutationActions: [],
             agentBakeAllowed: false,
             mutationPolicy: "blocked",

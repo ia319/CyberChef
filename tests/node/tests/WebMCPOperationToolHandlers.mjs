@@ -35,7 +35,7 @@ TestRegister.addApiTests([
             "To Base64",
             "From Base64",
         ]);
-        assert.equal(firstPage.data.items[0].reviewStatus, "safe");
+        assert.equal(firstPage.data.items[0].operationAccess, "direct");
         assert(firstPage.data.items[0].supportedActions.includes("insert"));
         assert.equal(firstPage.data.items.length, 2);
         assert.equal(firstPage.data.nextOffset, 2);
@@ -71,11 +71,11 @@ TestRegister.addApiTests([
 
         assert.equal(result.ok, true);
         assert.equal(result.data.name, "To Base64");
-        assert.equal(result.data.reviewStatus, "safe");
+        assert.equal(result.data.operationAccess, "direct");
         assert(result.data.supportedActions.includes("setArgument"));
         assert.equal(result.data.arguments.length, 1);
         assert.deepStrictEqual(result.data.arguments[0].defaultValue, "A-Za-z0-9+/=");
-        assert.equal(result.data.arguments[0].constraints.profileRule, "enum");
+        assert.equal(result.data.arguments[0].constraints.editable, true);
         assert.deepStrictEqual(result.data.options.map(option => option.value), [
             "A-Za-z0-9+/=",
             "A-Za-z0-9-_",
@@ -83,7 +83,7 @@ TestRegister.addApiTests([
         assert(JSON.stringify(result).length <= TOOL_RESULT_MAX_CHARS);
     }),
 
-    it("WebMCPOperationToolHandlers: should expose reviewed data-format constraints", async () => {
+    it("WebMCPOperationToolHandlers: should expose generated Ingredient constraints", async () => {
         const contract = TOOL_CONTRACTS[TOOL_NAME.GET_OPERATION_DETAILS],
             handler = OPERATION_TOOL_HANDLERS[TOOL_NAME.GET_OPERATION_DETAILS],
             result = await executeTool(contract, handler, {
@@ -109,14 +109,15 @@ TestRegister.addApiTests([
             });
 
         assert.equal(result.ok, true);
-        assert.equal(result.data.reviewStatus, "safe");
+        assert.equal(result.data.operationAccess, "direct");
         assert.equal(result.data.agentBakeAllowed, true);
         assert(result.data.supportedActions.includes("insert"));
-        assert.equal(result.data.arguments[0].constraints.profileRule, "string");
+        assert.equal(result.data.arguments[0].constraints.sourceMaxCodeUnits, null);
         assert.equal(encoding.data.arguments[0].index, 1);
-        assert.equal(encoding.data.arguments[0].constraints.profileRule, "conditional");
+        assert.equal(encoding.data.arguments[0].constraints.exactOption, true);
         assert.equal(witness.data.arguments[0].index, 4);
-        assert.equal(witness.data.arguments[0].constraints.profileRule, "conditional");
+        assert.equal(witness.data.arguments[0].constraints.minimum, null);
+        assert.equal(witness.data.arguments[0].constraints.maximum, null);
     }),
 
     it("WebMCPOperationToolHandlers: should distinguish HOTP approval from direct Bake access", async () => {
@@ -127,12 +128,12 @@ TestRegister.addApiTests([
         );
 
         assert.equal(result.ok, true);
-        assert.equal(result.data.reviewStatus, "constrained");
+        assert.equal(result.data.operationAccess, "approval");
         assert.equal(result.data.mutationPolicy, "userActionRequired");
         assert.equal(result.data.agentBakePolicy, "userActionRequired");
         assert.equal(result.data.agentBakeAllowed, false);
         assert(result.data.supportedActions.includes("insert"));
-        assert.equal(result.data.arguments[0].constraints.maximumCodePoints, 128);
+        assert.equal(result.data.arguments[0].constraints.allowEmpty, false);
     }),
 
     it("WebMCPOperationToolHandlers: should paginate large argument sets within the result budget", async () => {
