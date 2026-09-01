@@ -149,6 +149,7 @@ TestRegister.addApiTests([
             "From COBS",
             "From Charcode",
             "From Decimal",
+            "From Float",
             "From Hex",
             "From Octal",
             "ROT13",
@@ -164,6 +165,7 @@ TestRegister.addApiTests([
             "To COBS",
             "To Charcode",
             "To Decimal",
+            "To Float",
             "To Hex",
             "To Octal",
             "URL Decode",
@@ -205,10 +207,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 33,
+            safe: 35,
             constrained: 1,
             denied: 9,
-            unreviewed: 461,
+            unreviewed: 459,
         });
     }),
 
