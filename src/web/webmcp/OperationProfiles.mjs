@@ -1,4 +1,6 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
+import {BOUNDED_DATA_FORMAT_OPERATION_PROFILE_CONFIGS} from
+    "./BoundedDataFormatOperationProfiles.mjs";
 import { DATA_FORMAT_OPERATION_PROFILE_CONFIGS } from "./DataFormatOperationProfiles.mjs";
 import {LINEAR_DATA_FORMAT_OPERATION_PROFILE_CONFIGS} from
     "./LinearDataFormatOperationProfiles.mjs";
@@ -240,6 +242,9 @@ const DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
 const LINEAR_DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
     LINEAR_DATA_FORMAT_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
+const BOUNDED_DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
+    BOUNDED_DATA_FORMAT_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
+);
 const APPROVAL_OPERATION_PROFILES = Object.freeze(
     OTP_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
@@ -247,6 +252,7 @@ const STANDARD_OPERATION_PROFILES = Object.freeze([
     ...GOLDEN_OPERATION_PROFILES,
     ...DATA_FORMAT_OPERATION_PROFILES,
     ...LINEAR_DATA_FORMAT_OPERATION_PROFILES,
+    ...BOUNDED_DATA_FORMAT_OPERATION_PROFILES,
 ]);
 const OPERATION_PROFILES = Object.freeze([
     ...STANDARD_OPERATION_PROFILES,
@@ -273,6 +279,7 @@ function getOperationProfile(operationName) {
 export {
     APPROVAL_OPERATION_PROFILES,
     BASE64_ALPHABETS,
+    BOUNDED_DATA_FORMAT_OPERATION_PROFILES,
     DATA_FORMAT_OPERATION_PROFILES,
     FROM_HEX_DELIMITERS,
     GOLDEN_OPERATION_PROFILES,

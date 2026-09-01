@@ -146,6 +146,7 @@ TestRegister.addApiTests([
             "From Base92",
             "From Bech32",
             "From Binary",
+            "From COBS",
             "From Hex",
             "ROT13",
             "To Base32",
@@ -154,8 +155,10 @@ TestRegister.addApiTests([
             "To Base62",
             "To Base64",
             "To Base85",
+            "To Base92",
             "To Bech32",
             "To Binary",
+            "To COBS",
             "To Hex",
             "URL Decode",
             "URL Encode",
@@ -196,10 +199,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 24,
+            safe: 27,
             constrained: 1,
             denied: 9,
-            unreviewed: 470,
+            unreviewed: 467,
         });
     }),
 
