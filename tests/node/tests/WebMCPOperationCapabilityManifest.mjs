@@ -147,7 +147,10 @@ TestRegister.addApiTests([
             "From Bech32",
             "From Binary",
             "From COBS",
+            "From Charcode",
+            "From Decimal",
             "From Hex",
+            "From Octal",
             "ROT13",
             "To Base32",
             "To Base45",
@@ -159,7 +162,10 @@ TestRegister.addApiTests([
             "To Bech32",
             "To Binary",
             "To COBS",
+            "To Charcode",
+            "To Decimal",
             "To Hex",
+            "To Octal",
             "URL Decode",
             "URL Encode",
         ]);
@@ -199,10 +205,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 27,
+            safe: 33,
             constrained: 1,
             denied: 9,
-            unreviewed: 467,
+            unreviewed: 461,
         });
     }),
 
