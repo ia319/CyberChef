@@ -164,6 +164,7 @@ TestRegister.addApiTests([
             "From Punycode",
             "From Quoted Printable",
             "Normalise Unicode",
+            "PEM to Hex",
             "ROT13",
             "Text-Integer Conversion",
             "To Base32",
@@ -227,10 +228,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 55,
+            safe: 56,
             constrained: 1,
             denied: 9,
-            unreviewed: 439,
+            unreviewed: 438,
         });
     }),
 
