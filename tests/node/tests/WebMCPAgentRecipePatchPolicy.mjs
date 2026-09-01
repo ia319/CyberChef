@@ -114,16 +114,23 @@ TestRegister.addApiTests([
         assert.equal(blockedExecution.agentBakeAllowed, false);
     }),
 
-    it("WebMCPAgentRecipePatchPolicy: should derive a value-free HOTP approval summary", () => {
+    it("WebMCPAgentRecipePatchPolicy: should aggregate a value-free Recipe approval summary", () => {
         const nameCanary = "SECRET_ACCOUNT_CANARY",
+            captureCanary = "SECRET_CAPTURE_CANARY",
             approved = authorizeAgentRecipePatch({
                 steps: [{
                     operation: {op: "Generate HOTP", args: [nameCanary, 8, 42]},
+                }, {
+                    operation: {op: "Register", args: [captureCanary, true, false, false]},
                 }],
                 actions: [{
                     commandIndex: 0,
                     type: "insert",
                     operationName: "Generate HOTP",
+                }, {
+                    commandIndex: 1,
+                    type: "insert",
+                    operationName: "Register",
                 }],
             }),
             serialized = JSON.stringify(approved);
@@ -132,12 +139,13 @@ TestRegister.addApiTests([
         assert.equal(approved.approvalModificationAllowed, true);
         assert.equal(approved.approvalBakeAllowed, true);
         assert.deepStrictEqual(approved.approvalSummary, {
-            operationNames: ["Generate HOTP"],
-            sensitiveParameterNames: ["Name"],
-            riskFlags: ["secretInput", "sensitiveOutput"],
+            operationNames: ["Generate HOTP", "Register"],
+            sensitiveParameterNames: [],
+            riskFlags: ["secretInput", "sensitiveOutput", "inputDerivedArguments"],
             changeTypes: ["insert"],
         });
         assert.equal(serialized.includes(nameCanary), false);
+        assert.equal(serialized.includes(captureCanary), false);
         assert.equal(serialized.includes("42"), false);
     }),
 

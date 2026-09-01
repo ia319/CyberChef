@@ -1,7 +1,6 @@
 import assert from "assert";
 import {
     fingerprintApprovalAction,
-    MAX_APPROVAL_ACTION_BYTES,
 } from "../../../src/web/webmcp/ApprovalAction.mjs";
 import {
     APPROVAL_CHANGE_TYPE,
@@ -12,6 +11,8 @@ import {
     APPROVAL_STATE,
     ApprovalCoordinator,
 } from "../../../src/web/webmcp/ApprovalCoordinator.mjs";
+import {OPERATION_APPROVAL_POLICY} from
+    "../../../src/web/webmcp/OperationApprovalPolicy.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
@@ -101,16 +102,21 @@ TestRegister.addApiTests([
         assert.match(first, /^[0-9a-f]{64}$/u);
     }),
 
-    it("WebMCPApprovalAction: should reject unsafe and oversized actions", async () => {
+    it("WebMCPApprovalAction: should reject unsafe actions", async () => {
         const accessor = {};
         Object.defineProperty(accessor, "secret", {enumerable: true, get: () => "value"});
 
         await assert.rejects(fingerprintApprovalAction(accessor), TypeError);
-        await assert.rejects(
-            fingerprintApprovalAction({value: "x".repeat(MAX_APPROVAL_ACTION_BYTES + 1)}),
-            RangeError
-        );
         await assert.rejects(fingerprintApprovalAction({value: -0}), TypeError);
+    }),
+
+    it("WebMCPApprovalAction: should fingerprint actions beyond the removed local limits", async () => {
+        const digest = await fingerprintApprovalAction({
+            values: Array.from({length: 300}, (_, index) => index),
+            text: "x".repeat(8193),
+        });
+
+        assert.match(digest, /^[0-9a-f]{64}$/u);
     }),
 
     it("WebMCPApprovalCoordinator: should expose only a redacted pending request", async () => {
@@ -148,6 +154,22 @@ TestRegister.addApiTests([
             }),
             TypeError
         );
+    }),
+
+    it("WebMCPApprovalCoordinator: should accept a complete approval Operation list", async () => {
+        const {coordinator} = createFixture(),
+            state = await coordinator.requestApproval({
+                sessionEpoch: "session-epoch-1",
+                action: ACTION,
+                summary: {
+                    operationNames: OPERATION_APPROVAL_POLICY.getOperationNames(),
+                    changeTypes: [APPROVAL_CHANGE_TYPE.INSERT],
+                    sensitiveParameterNames: [],
+                    riskFlags: [APPROVAL_RISK_FLAG.NETWORK_ACCESS],
+                },
+            });
+
+        assert.equal(state.summary.operationNames.length, 51);
     }),
 
     it("WebMCPApprovalCoordinator: should reuse only an identical active request", async () => {

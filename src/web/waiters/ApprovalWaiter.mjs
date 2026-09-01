@@ -19,6 +19,9 @@ const CHANGE_TEXT = Object.freeze({
         richContent: "produce active or rich content",
         resourceIntensive: "use significant browser resources",
         browserSideEffect: "perform a browser-visible side effect",
+        recipeFlow: "change Recipe control flow",
+        nondeterministic: "produce time-dependent or nondeterministic results",
+        inputDerivedArguments: "copy captured Input-derived data into later Operation arguments",
     }),
     TERMINAL_STATUS = Object.freeze({
         [APPROVAL_STATE.COMPLETE]: "The approved WebMCP action completed.",
@@ -54,7 +57,7 @@ function formatApprovalSummary(summary) {
         changes: `Requested Recipe effects: ${formatList(changes)}.`,
         parameters: summary.sensitiveParameterNames.length > 0 ?
             `Values remain hidden. Sensitive parameters: ${formatList(summary.sensitiveParameterNames)}.` :
-            "No sensitive parameters are identified for this request.",
+            "Parameter values remain hidden.",
         risks: risks.length > 0 ?
             `Additional effects: ${formatList(risks)}.` :
             "No additional sensitive effects are identified for this request.",

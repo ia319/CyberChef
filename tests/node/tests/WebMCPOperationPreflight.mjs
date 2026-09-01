@@ -90,10 +90,10 @@ TestRegister.addApiTests([
 
     it("WebMCPOperationPreflight: should authorize complete Recipes by access class", () => {
         const approval = preflightOperationRecipe([
-                operationStep("Generate HOTP", ["Account", 6, 0]),
-                operationStep("Generate HOTP", ["Second", 8, 1]),
+                operationStep("HTTP request"),
+                operationStep("Render PDF"),
+                operationStep("Register", ["SECRET_CAPTURE_CANARY", true, false, false]),
             ]),
-            missingApprovalMetadata = preflightOperationRecipe([operationStep("Register")]),
             disabledBlocked = preflightOperationRecipe([
                 operationStep("Magic", undefined, true),
                 operationStep("To Base64"),
@@ -103,11 +103,17 @@ TestRegister.addApiTests([
 
         assert.equal(approval.approvalModificationAllowed, true);
         assert.equal(approval.approvalBakeAllowed, true);
-        assert.deepStrictEqual(approval.approvalSummary.operationNames, ["Generate HOTP"]);
-        assert.equal(missingApprovalMetadata.approvalRequired, true);
-        assert.equal(missingApprovalMetadata.approvalModificationAllowed, false);
-        assert(issueCodes(missingApprovalMetadata)
-            .has(PREFLIGHT_ISSUE_CODE.APPROVAL_METADATA_REQUIRED));
+        assert.deepStrictEqual(approval.approvalSummary.operationNames, [
+            "HTTP request",
+            "Render PDF",
+            "Register",
+        ]);
+        assert.deepStrictEqual(approval.approvalSummary.riskFlags, [
+            "networkAccess",
+            "richContent",
+            "inputDerivedArguments",
+        ]);
+        assert.equal(JSON.stringify(approval).includes("SECRET_CAPTURE_CANARY"), false);
         assert.equal(disabledBlocked.agentBakeAllowed, true);
         assert.deepStrictEqual(disabledBlocked.issues, []);
         assert(issueCodes(blocked).has(PREFLIGHT_ISSUE_CODE.BLOCKED_OPERATION));

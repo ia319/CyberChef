@@ -1,9 +1,8 @@
 import {fingerprintApprovalAction} from "./ApprovalAction.mjs";
+import {APPROVAL_RISK_FLAG} from "./ApprovalRisk.mjs";
 import {copyJsonValue} from "./JsonValue.mjs";
 
 const APPROVAL_TTL_MS = 120_000,
-    MAX_APPROVAL_OPERATION_NAMES = 16,
-    MAX_APPROVAL_PARAMETER_NAMES = 32,
     MAX_APPROVAL_LABEL_LENGTH = 80,
     APPROVAL_STATE = Object.freeze({
         NONE: "none",
@@ -28,14 +27,6 @@ const APPROVAL_TTL_MS = 120_000,
         MOVE: "move",
         SET_DISABLED: "setDisabled",
         SET_BREAKPOINT: "setBreakpoint",
-    }),
-    APPROVAL_RISK_FLAG = Object.freeze({
-        SECRET_INPUT: "secretInput",
-        SENSITIVE_OUTPUT: "sensitiveOutput",
-        NETWORK_ACCESS: "networkAccess",
-        RICH_CONTENT: "richContent",
-        RESOURCE_INTENSIVE: "resourceIntensive",
-        BROWSER_SIDE_EFFECT: "browserSideEffect",
     }),
     APPROVAL_END_REASON = Object.freeze({
         USER_REJECTED: "userRejected",
@@ -111,11 +102,10 @@ function validateSessionEpoch(sessionEpoch) {
  *
  * @param {*} value - Candidate list.
  * @param {string} field - Field name used by bounded validation errors.
- * @param {number} maxItems - Maximum list length.
  * @returns {Array<string>} Frozen detached labels.
  */
-function copyLabels(value, field, maxItems) {
-    if (!Array.isArray(value) || value.length < 1 || value.length > maxItems) {
+function copyLabels(value, field) {
+    if (!Array.isArray(value) || value.length < 1 || new Set(value).size !== value.length) {
         throw new TypeError(`Approval ${field} is invalid`);
     }
     const labels = value.map(label => {
@@ -166,8 +156,7 @@ function copyApprovalSummary(summary) {
 
     const sensitiveParameterNames = safeSummary.sensitiveParameterNames ?? [],
         riskFlags = safeSummary.riskFlags ?? [];
-    if (!Array.isArray(sensitiveParameterNames) ||
-        sensitiveParameterNames.length > MAX_APPROVAL_PARAMETER_NAMES) {
+    if (!Array.isArray(sensitiveParameterNames)) {
         throw new TypeError("Approval sensitiveParameterNames is invalid");
     }
     if (!Array.isArray(riskFlags) || riskFlags.length > RISK_FLAGS.size ||
@@ -176,14 +165,10 @@ function copyApprovalSummary(summary) {
     }
 
     return Object.freeze({
-        operationNames: copyLabels(
-            safeSummary.operationNames,
-            "operationNames",
-            MAX_APPROVAL_OPERATION_NAMES
-        ),
+        operationNames: copyLabels(safeSummary.operationNames, "operationNames"),
         changeTypes: copyContractValues(safeSummary.changeTypes, CHANGE_TYPES, "changeTypes"),
         sensitiveParameterNames: sensitiveParameterNames.length === 0 ? Object.freeze([]) :
-            copyLabels(sensitiveParameterNames, "sensitiveParameterNames", MAX_APPROVAL_PARAMETER_NAMES),
+            copyLabels(sensitiveParameterNames, "sensitiveParameterNames"),
         riskFlags: Object.freeze([...riskFlags]),
     });
 }

@@ -1,5 +1,6 @@
 import {OPERATION_ACCESS} from "./OperationAccessAudit.mjs";
 import {resolveOperationArguments} from "./OperationArguments.mjs";
+import {OPERATION_APPROVAL_POLICY} from "./OperationApprovalPolicy.mjs";
 import {OPERATION_CAPABILITY_MANIFEST} from "./OperationCapabilityManifest.mjs";
 import {getOperationPermissions} from "./OperationPermissions.mjs";
 
@@ -109,19 +110,22 @@ function preflightOperationRecipe(recipe) {
             }
 
             if (permissions.operationAccess === OPERATION_ACCESS.APPROVAL) {
+                const approvalSummary = OPERATION_APPROVAL_POLICY.getOperationSummary(
+                    step.operationName
+                );
                 approvalRequired = true;
                 standardModificationAllowed = false;
                 approvalOperationNames.add(step.operationName);
                 addIssue(PREFLIGHT_ISSUE_CODE.APPROVAL_OPERATION, stepIndex);
-                if (!capability.approvalSummary) {
+                if (!approvalSummary) {
                     approvalModificationAllowed = false;
                     addIssue(PREFLIGHT_ISSUE_CODE.APPROVAL_METADATA_REQUIRED, stepIndex);
                     continue;
                 }
-                for (const name of capability.approvalSummary.sensitiveParameterNames) {
+                for (const name of approvalSummary.sensitiveParameterNames) {
                     approvalSensitiveParameterNames.add(name);
                 }
-                for (const flag of capability.approvalSummary.riskFlags) {
+                for (const flag of approvalSummary.riskFlags) {
                     approvalRiskFlags.add(flag);
                 }
             }

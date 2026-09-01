@@ -36,10 +36,11 @@ TestRegister.addApiTests([
         const summary = formatApprovalSummary({
                 operationNames: ["Generate HOTP"],
                 changeTypes: [APPROVAL_CHANGE_TYPE.INSERT],
-                sensitiveParameterNames: ["Secret"],
+                sensitiveParameterNames: [],
                 riskFlags: [
                     APPROVAL_RISK_FLAG.SECRET_INPUT,
                     APPROVAL_RISK_FLAG.SENSITIVE_OUTPUT,
+                    APPROVAL_RISK_FLAG.INPUT_DERIVED_ARGUMENTS,
                 ],
                 value: "SECRET_CANARY",
             }),
@@ -48,8 +49,9 @@ TestRegister.addApiTests([
         assert.deepStrictEqual(summary, {
             operations: "Operations: Generate HOTP.",
             changes: "Requested Recipe effects: add an Operation.",
-            parameters: "Values remain hidden. Sensitive parameters: Secret.",
-            risks: "Additional effects: process sensitive Input data and produce sensitive output.",
+            parameters: "Parameter values remain hidden.",
+            risks: "Additional effects: process sensitive Input data, produce sensitive output and " +
+                "copy captured Input-derived data into later Operation arguments.",
         });
         assert.equal(serialized.includes("SECRET_CANARY"), false);
     }),
