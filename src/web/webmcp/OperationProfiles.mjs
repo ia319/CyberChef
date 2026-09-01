@@ -1,5 +1,7 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
 import { DATA_FORMAT_OPERATION_PROFILE_CONFIGS } from "./DataFormatOperationProfiles.mjs";
+import {LINEAR_DATA_FORMAT_OPERATION_PROFILE_CONFIGS} from
+    "./LinearDataFormatOperationProfiles.mjs";
 import {OTP_OPERATION_PROFILE_CONFIGS} from "./OtpOperationProfiles.mjs";
 import {
     PROFILE_VALIDATION_CODE,
@@ -235,12 +237,16 @@ const GOLDEN_OPERATION_PROFILES = Object.freeze([
 const DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
     DATA_FORMAT_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
+const LINEAR_DATA_FORMAT_OPERATION_PROFILES = Object.freeze(
+    LINEAR_DATA_FORMAT_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
+);
 const APPROVAL_OPERATION_PROFILES = Object.freeze(
     OTP_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
 const STANDARD_OPERATION_PROFILES = Object.freeze([
     ...GOLDEN_OPERATION_PROFILES,
     ...DATA_FORMAT_OPERATION_PROFILES,
+    ...LINEAR_DATA_FORMAT_OPERATION_PROFILES,
 ]);
 const OPERATION_PROFILES = Object.freeze([
     ...STANDARD_OPERATION_PROFILES,
@@ -271,6 +277,7 @@ export {
     FROM_HEX_DELIMITERS,
     GOLDEN_OPERATION_PROFILES,
     GOLDEN_RECIPE_RESOURCE_LIMITS,
+    LINEAR_DATA_FORMAT_OPERATION_PROFILES,
     OPERATION_PROFILE_VERSION,
     OPERATION_PROFILES,
     PROFILE_ARGUMENT_RULE,

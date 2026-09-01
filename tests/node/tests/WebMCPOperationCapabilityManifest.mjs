@@ -135,12 +135,15 @@ TestRegister.addApiTests([
         );
 
         assert.deepStrictEqual(safeOperations, [
+            "Caret/M-decode",
+            "Escape Smart Characters",
             "From Base32",
             "From Base45",
             "From Base58",
             "From Base62",
             "From Base64",
             "From Base85",
+            "From Base92",
             "From Bech32",
             "From Binary",
             "From Hex",
@@ -193,10 +196,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 21,
+            safe: 24,
             constrained: 1,
             denied: 9,
-            unreviewed: 473,
+            unreviewed: 470,
         });
     }),
 
