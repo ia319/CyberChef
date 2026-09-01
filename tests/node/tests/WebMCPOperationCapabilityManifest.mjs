@@ -155,7 +155,9 @@ TestRegister.addApiTests([
             "From Float",
             "From HTML Entity",
             "From Hex",
+            "From Hex Content",
             "From Hexdump",
+            "From Modhex",
             "From Octal",
             "From Punycode",
             "From Quoted Printable",
@@ -177,7 +179,9 @@ TestRegister.addApiTests([
             "To Float",
             "To HTML Entity",
             "To Hex",
+            "To Hex Content",
             "To Hexdump",
+            "To Modhex",
             "To Octal",
             "To Punycode",
             "To Quoted Printable",
@@ -221,10 +225,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 49,
+            safe: 53,
             constrained: 1,
             denied: 9,
-            unreviewed: 445,
+            unreviewed: 441,
         });
     }),
 
