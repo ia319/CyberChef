@@ -169,6 +169,7 @@ TestRegister.addApiTests([
             "MIME Decoding",
             "Normalise Unicode",
             "PEM to Hex",
+            "Parse TLV",
             "ROT13",
             "Swap endianness",
             "Text-Integer Conversion",
@@ -234,10 +235,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 62,
+            safe: 63,
             constrained: 1,
             denied: 9,
-            unreviewed: 432,
+            unreviewed: 431,
         });
     }),
 

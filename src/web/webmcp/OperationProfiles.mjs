@@ -30,6 +30,7 @@ import {QUOTED_PRINTABLE_OPERATION_PROFILE_CONFIGS} from
 import {PUNYCODE_OPERATION_PROFILE_CONFIGS} from "./PunycodeOperationProfiles.mjs";
 import {TEXT_ESCAPING_OPERATION_PROFILE_CONFIGS} from
     "./TextEscapingOperationProfiles.mjs";
+import {TLV_OPERATION_PROFILE_CONFIGS} from "./TlvOperationProfiles.mjs";
 import {
     PROFILE_VALIDATION_CODE,
     resolveOperationProfileArguments,
@@ -312,6 +313,9 @@ const PEM_OPERATION_PROFILES = Object.freeze(
 const TEXT_ESCAPING_OPERATION_PROFILES = Object.freeze(
     TEXT_ESCAPING_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
+const TLV_OPERATION_PROFILES = Object.freeze(
+    TLV_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
+);
 const QUOTED_PRINTABLE_OPERATION_PROFILES = Object.freeze(
     QUOTED_PRINTABLE_OPERATION_PROFILE_CONFIGS.map(defineOperationProfile)
 );
@@ -340,6 +344,7 @@ const STANDARD_OPERATION_PROFILES = Object.freeze([
     ...NUMERIC_DATA_FORMAT_OPERATION_PROFILES,
     ...PEM_OPERATION_PROFILES,
     ...TEXT_ESCAPING_OPERATION_PROFILES,
+    ...TLV_OPERATION_PROFILES,
     ...QUOTED_PRINTABLE_OPERATION_PROFILES,
     ...PUNYCODE_OPERATION_PROFILES,
 ]);
@@ -395,6 +400,7 @@ export {
     PUNYCODE_OPERATION_PROFILES,
     STANDARD_OPERATION_PROFILES,
     TEXT_ESCAPING_OPERATION_PROFILES,
+    TLV_OPERATION_PROFILES,
     TO_HEX_DELIMITERS,
     defineOperationProfile,
     getOperationProfile,
