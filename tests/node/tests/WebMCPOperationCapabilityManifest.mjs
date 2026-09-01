@@ -152,6 +152,7 @@ TestRegister.addApiTests([
             "From Base92",
             "From Bech32",
             "From Binary",
+            "From Braille",
             "From COBS",
             "From Charcode",
             "From Decimal",
@@ -178,6 +179,7 @@ TestRegister.addApiTests([
             "To Base92",
             "To Bech32",
             "To Binary",
+            "To Braille",
             "To COBS",
             "To Charcode",
             "To Decimal",
@@ -230,10 +232,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 58,
+            safe: 60,
             constrained: 1,
             denied: 9,
-            unreviewed: 436,
+            unreviewed: 434,
         });
     }),
 
