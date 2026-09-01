@@ -137,6 +137,7 @@ TestRegister.addApiTests([
         assert.deepStrictEqual(safeOperations, [
             "Caret/M-decode",
             "Escape Smart Characters",
+            "Escape Unicode Characters",
             "From BCD",
             "From Base",
             "From Base32",
@@ -152,6 +153,7 @@ TestRegister.addApiTests([
             "From Charcode",
             "From Decimal",
             "From Float",
+            "From HTML Entity",
             "From Hex",
             "From Hexdump",
             "From Octal",
@@ -169,11 +171,13 @@ TestRegister.addApiTests([
             "To Charcode",
             "To Decimal",
             "To Float",
+            "To HTML Entity",
             "To Hex",
             "To Hexdump",
             "To Octal",
             "URL Decode",
             "URL Encode",
+            "Unescape Unicode Characters",
         ]);
         for (const operationName of safeOperations) {
             const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName);
@@ -211,10 +215,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 39,
+            safe: 43,
             constrained: 1,
             denied: 9,
-            unreviewed: 455,
+            unreviewed: 451,
         });
     }),
 
