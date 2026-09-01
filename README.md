@@ -18,6 +18,7 @@ The tool is designed to enable both technical and non-technical analysts to mani
 - [Running Locally](#running-locally)
   - [With Docker](#with-docker)
   - [From source](#from-source)
+- [WebMCP Recipe access](#webmcp-recipe-access)
 - [How it works](#how-it-works)
 - [Features](#features)
 - [Deep linking](#deep-linking)
@@ -100,6 +101,39 @@ npm install
 | `npm run newop` | Scaffold a new operation via the interactive quickstart script. |
 
 If you hit an out-of-memory error while building large recipes, increase Node's heap size with `npm run setheapsize`.
+
+## WebMCP Recipe access
+
+This fork includes experimental WebMCP support for working with the visible CyberChef Recipe through six high-level tools:
+
+- `search_operations`
+- `get_operation_details`
+- `get_recipe_state`
+- `apply_recipe_patch`
+- `bake_recipe`
+- `inspect_output`
+
+CyberChef keeps Recipe execution and Output analysis in the browser. The integration does not add an Agent backend or a remote transformation service. Browsers without WebMCP continue to run CyberChef normally.
+
+Operation catalog searches use fixed, sanitised metadata. Reading Recipe state, changing the Recipe, requesting a Bake, and inspecting Output-derived signals require the user to start the page-scoped **WebMCP Recipe access** session. Tool results do not return raw Input, raw Output, current Recipe argument values, Comment text, or Magic candidate parameters. `inspect_output` returns only bounded signals derived locally from the current completed Bake.
+
+WebMCP Recipe changes remain visible in the shared Recipe pane. CyberChef retains one before-change snapshot for the latest WebMCP patch and allows the user to restore it only while no later Recipe edit has changed the revision.
+
+To try the integration locally:
+
+1. Enable WebMCP or its testing interface in a compatible browser, then restart the browser.
+2. Run `npm start` and open `http://localhost:8080`.
+3. Select **Start** in the **WebMCP Recipe access** panel.
+4. Discover and invoke the six tools from the browser Agent.
+
+Build the production assets before running the dedicated browser integration suite:
+
+```bash
+npm run build
+npm run testwebmcp
+```
+
+The tool contracts are defined in [`ToolDefinitions.mjs`](./src/web/webmcp/ToolDefinitions.mjs), the browser provider boundary is implemented in [`WebMCPWaiter.mjs`](./src/web/waiters/WebMCPWaiter.mjs), and the production discovery and invocation flow is covered by [`04_webmcp.js`](./tests/browser/04_webmcp.js).
 
 ## How it works
 

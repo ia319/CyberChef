@@ -51,15 +51,50 @@ function setInput(browser, input, type=true) {
  */
 function bake(browser) {
     browser
-        // Let any pending debounced inputChange/stateChange (~20ms each) fire so the
-        // worker has the latest input buffer before we ask it to bake.
         .pause(50)
-        // Ensure we're not currently busy
         .waitForElementNotVisible("#output-loader", 10000)
+        .waitForElementNotVisible("#snackbar-container", 6000)
         .expect.element("#bake span").text.to.equal("BAKE!");
 
     browser
+        .execute(() => {
+            const inputNum = window.app.manager.tabs.getActiveTab("input"),
+                output = window.app.manager.output.outputs[inputNum];
+            window.__bakePreviousId = output?.bakeId ?? null;
+        })
         .click("#bake")
+        .executeAsync(async done => {
+            const deadline = Date.now() + 10000,
+                inputNum = window.app.manager.tabs.getActiveTab("input"),
+                outputWaiter = window.app.manager.output,
+                previousBakeId = window.__bakePreviousId;
+
+            while (Date.now() < deadline) {
+                const output = outputWaiter.outputs[inputNum],
+                    presentation = output?.presentation;
+                if (output?.bakeId !== previousBakeId &&
+                    outputWaiter.outputIsFresh(inputNum) &&
+                    presentation?.outputGeneration === output.outputGeneration &&
+                    presentation.outputVersion === output.outputVersion) {
+                    const completed = await Promise.race([
+                        presentation.completion.then(value => value === true).catch(() => false),
+                        new Promise(resolve => setTimeout(() => resolve(null), 50)),
+                    ]);
+                    if (completed === true && outputWaiter.outputs[inputNum] === output &&
+                        output.presentation === presentation && outputWaiter.outputIsFresh(inputNum)) {
+                        delete window.__bakePreviousId;
+                        done(true);
+                        return;
+                    }
+                    if (completed === false) break;
+                }
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+            delete window.__bakePreviousId;
+            done(false);
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value, true, "The active Output completes the requested Bake");
+        })
         .waitForElementNotVisible("#stale-indicator", 10000)
         .waitForElementNotVisible("#output-loader", 10000);
 }
@@ -143,14 +178,47 @@ function paste(browser, el) {
 }
 
 /** @function
+ * Asserts raw copy data before it crosses the Windows system clipboard boundary.
+ *
+ * @param {Browser} browser - Nightwatch client
+ * @param {number[]} expectedCharCodes - Expected leading character codes
+ * @returns {void}
+ */
+function expectRawCopy(browser, expectedCharCodes) {
+    // Windows clipboard strings are NUL-terminated, so assert the browser API boundary directly.
+    browser
+        .execute(() => {
+            Object.defineProperty(navigator.clipboard, "writeText", {
+                configurable: true,
+                value: text => {
+                    window.__rawCopyText = text;
+                    return Promise.resolve();
+                },
+            });
+        })
+        .click("#copy-output")
+        .pause(100)
+        .execute(length => Array.from(
+            window.__rawCopyText.slice(0, length),
+            char => char.charCodeAt(0)
+        ), [expectedCharCodes.length], ({value}) => {
+            browser.assert.deepStrictEqual(value, expectedCharCodes);
+        })
+        .execute(() => {
+            delete navigator.clipboard.writeText;
+            delete window.__rawCopyText;
+        });
+}
+
+/** @function
  * Loads a recipe and input
  *
  * @param {Browser} browser - Nightwatch client
  * @param {string|Array<string>} opName - name of operation to be loaded, array for multiple ops
  * @param {string} input - input text for test
- * @param {Array<string>|Array<Array<string>>} args - arguments, nested if multiple ops
+ * @param {Array<string>|Array<Array<string>>} [args=[]] - arguments, nested if multiple ops
  */
-function loadRecipe(browser, opName, input, args) {
+function loadRecipe(browser, opName, input, args=[]) {
     let recipeConfig;
 
     if (typeof(opName) === "string") {
@@ -171,9 +239,11 @@ function loadRecipe(browser, opName, input, args) {
         throw new Error("Invalid operation type. Must be string or array of strings. Received: " + typeof(opName));
     }
 
-    setInput(browser, input, false);
+    const inputEncoding = Array.from(input).some(char => char.charCodeAt(0) > 255) ? "utf8" : "latin1",
+        inputConfig = Buffer.from(input, inputEncoding).toString("base64").replace(/=+$/u, "");
+
     browser
-        .urlHash("recipe=" + recipeConfig)
+        .urlHash(`recipe=${encodeURIComponent(recipeConfig)}&input=${encodeURIComponent(inputConfig)}`)
         .waitForElementPresent("#rec-list li.operation");
 }
 
@@ -281,6 +351,7 @@ module.exports = {
     setEOLSeq: setEOLSeq,
     copy: copy,
     paste: paste,
+    expectRawCopy: expectRawCopy,
     loadRecipe: loadRecipe,
     expectOutput: expectOutput,
     expectInput: expectInput,

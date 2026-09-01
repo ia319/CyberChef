@@ -293,22 +293,41 @@ module.exports = {
         browser
             .doubleClick("#output-text .cm-content .cm-line:nth-of-type(1) .cm-specialChar:nth-of-type(1)")
             .waitForElementVisible("#output-text .cm-selectionBackground");
-        utils.copy(browser);
-        utils.paste(browser, "#search"); // Paste into search box as this won't mess with the values
 
-        // Ensure that the values are as expected
-        browser.expect.element("#search").to.have.value.that.equals("\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008");
-        browser.clearValue("#search");
+        if (process.platform === "win32") {
+            // Windows clipboard strings are NUL-terminated, so assert the browser API boundary directly.
+            browser.execute(() => {
+                document.addEventListener("copy", event => {
+                    window.__manualCopyText = event.clipboardData?.getData("text/plain") || "";
+                }, {once: true});
+            });
+            utils.copy(browser);
+            browser.execute(() => Array.from(
+                window.__manualCopyText,
+                char => char.charCodeAt(0)
+            ), [], ({value}) => {
+                browser.assert.deepStrictEqual(value, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+            }).execute(() => {
+                delete window.__manualCopyText;
+            });
+        } else {
+            utils.copy(browser);
+            utils.paste(browser, "#search"); // Paste into search box as this won't mess with the values
+            browser.expect.element("#search").to.have.value.that.equals("\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008");
+            browser.clearValue("#search");
+        }
 
         // Raw copy
-        browser
-            .click("#copy-output")
-            .pause(100);
-        utils.paste(browser, "#search"); // Paste into search box as this won't mess with the values
-
-        // Ensure that the values are as expected
-        browser.expect.element("#search").to.have.value.that.matches(/^\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u0009/);
-        browser.clearValue("#search");
+        if (process.platform === "win32") {
+            utils.expectRawCopy(browser, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        } else {
+            browser
+                .click("#copy-output")
+                .pause(100);
+            utils.paste(browser, "#search"); // Paste into search box as this won't mess with the values
+            browser.expect.element("#search").to.have.value.that.matches(/^\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\u0008\u0009/);
+            browser.clearValue("#search");
+        }
     },
 
     "HTML output": browser => {
@@ -339,14 +358,18 @@ module.exports = {
 
         /* Can be copied */
         // Raw copy
-        browser
-            .click("#copy-output")
-            .pause(100);
-        utils.paste(browser, "#search"); // Paste into search box as this won't mess with the values
+        if (process.platform === "win32") {
+            utils.expectRawCopy(browser, [0, 1, 2, 3, 4]);
+        } else {
+            browser
+                .click("#copy-output")
+                .pause(100);
+            utils.paste(browser, "#search"); // Paste into search box as this won't mess with the values
 
-        // Ensure that the values are as expected
-        browser.expect.element("#search").to.have.value.that.matches(/\u0000\u0001\u0002\u0003\u0004/);
-        browser.clearValue("#search");
+            // Ensure that the values are as expected
+            browser.expect.element("#search").to.have.value.that.matches(/\u0000\u0001\u0002\u0003\u0004/);
+            browser.clearValue("#search");
+        }
     },
 
     "Highlighting": browser => {

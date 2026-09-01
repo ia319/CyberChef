@@ -23,7 +23,11 @@
     },
 
     "prod": {
-      "launch_url": "http://localhost:8000/index.html"
+      "launch_url": "http://localhost:8000/index.html",
+      "exclude": [
+        "tests/browser/browserUtils.js",
+        "tests/browser/04_webmcp.js"
+      ]
     },
 
     "webmcp": {
