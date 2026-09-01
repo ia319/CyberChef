@@ -75,6 +75,17 @@ jobs:
         run: |
           xvfb-run --server-args="-screen 0 1200x800x24" npm run testwebmcp
 
+      - name: Browser Test Diagnostics
+        if: failure() && steps.setup-chrome.outcome == 'success'
+        env:
+          CYBERCHEF_TEST_CHROME_BINARY: ${{ steps.setup-chrome.outputs.chrome-binary }}
+        run: |
+          "$CYBERCHEF_TEST_CHROME_BINARY" --version || true
+          ldd "$CYBERCHEF_TEST_CHROME_BINARY" || true
+          if [ -d tests/browser/output ]; then
+            find tests/browser/output -maxdepth 1 -type f -name '*chromedriver.log' -print -exec cat {} \;
+          fi
+
       - name: Set up Docker Buildx
         if: success()
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
