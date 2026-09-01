@@ -1,7 +1,5 @@
-import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
-import Ingredient from "../../core/Ingredient.mjs";
+import {resolveOperationArguments} from "./OperationArguments.mjs";
 import {
-    isProfilePrimitive,
     matchesOperationProfileRelations,
     matchesOperationProfileRule,
 } from "./OperationProfileRules.mjs";
@@ -12,33 +10,6 @@ const PROFILE_VALIDATION_CODE = Object.freeze({
     CORE_ARGUMENT_VALUE: "CORE_ARGUMENT_VALUE",
     ARGUMENT_RELATION: "ARGUMENT_RELATION",
 });
-
-
-/**
- * Applies CyberChef Ingredient validation before any Agent-only restriction.
- *
- * @param {string} operationName - Exact Operation name.
- * @param {Array} values - Complete primitive Operation arguments.
- * @returns {boolean} Whether core validation accepts every argument.
- */
-function validateCoreOperationArguments(operationName, values) {
-    const operation = Object.prototype.hasOwnProperty.call(OperationConfig, operationName) ?
-            OperationConfig[operationName] : null,
-        argumentsConfig = operation?.args;
-    if (!Array.isArray(argumentsConfig) || argumentsConfig.length !== values.length ||
-        values.some(value => !isProfilePrimitive(value))) {
-        return false;
-    }
-
-    try {
-        for (let index = 0; index < argumentsConfig.length; index++) {
-            new Ingredient(argumentsConfig[index]).validate(values[index]);
-        }
-    } catch (err) {
-        return false;
-    }
-    return true;
-}
 
 
 /**
@@ -53,7 +24,7 @@ function resolveOperationProfileArguments(profile, argumentsValue) {
     if (!Array.isArray(values) || values.length !== profile.argumentRules.length) {
         return Object.freeze({valid: false, code: PROFILE_VALIDATION_CODE.ARGUMENT_COUNT});
     }
-    if (!validateCoreOperationArguments(profile.operationName, values)) {
+    if (!resolveOperationArguments(profile.operationName, values).valid) {
         return Object.freeze({valid: false, code: PROFILE_VALIDATION_CODE.CORE_ARGUMENT_VALUE});
     }
 
@@ -75,5 +46,4 @@ function resolveOperationProfileArguments(profile, argumentsValue) {
 export {
     PROFILE_VALIDATION_CODE,
     resolveOperationProfileArguments,
-    validateCoreOperationArguments,
 };

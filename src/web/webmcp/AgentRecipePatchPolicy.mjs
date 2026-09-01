@@ -4,10 +4,7 @@ import {
 } from "../recipe/RecipeTransaction.mjs";
 import {evaluateOperationMutation} from "./OperationPermissions.mjs";
 import {preflightOperationRecipe} from "./OperationPreflight.mjs";
-import {
-    getOperationProfile,
-    resolveOperationProfileArguments,
-} from "./OperationProfiles.mjs";
+import {resolveOperationArguments} from "./OperationArguments.mjs";
 
 const APPROVAL_CHANGE_TYPES = Object.freeze({
     insert: "insert",
@@ -21,25 +18,17 @@ const APPROVAL_CHANGE_TYPES = Object.freeze({
 
 
 /**
- * Supplies reviewed defaults before the generic Recipe patch engine runs.
+ * Supplies CyberChef defaults before the generic Recipe patch engine runs.
  *
  * @param {Object[]} changes - Detached schema-validated Agent commands.
  * @returns {Object[]} Commands with complete insert arguments.
- * @throws {RecipeTransactionError} When an insert lacks a reviewed profile or valid arguments.
+ * @throws {RecipeTransactionError} When an insert names an unknown Operation or invalid arguments.
  */
 function prepareAgentRecipeChanges(changes) {
     return changes.map((change, commandIndex) => {
         if (change.type !== "insert") return change;
 
-        const profile = getOperationProfile(change.operation);
-        if (!profile) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED, {
-                commandIndex,
-                policyCode: "PROFILE_REQUIRED",
-            });
-        }
-
-        const argumentResult = resolveOperationProfileArguments(profile, change.arguments);
+        const argumentResult = resolveOperationArguments(change.operation, change.arguments);
         if (!argumentResult.valid) {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH, {
                 commandIndex,

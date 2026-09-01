@@ -12,7 +12,7 @@ import it from "../assertionHandler.mjs";
 
 
 TestRegister.addApiTests([
-    it("WebMCPAgentRecipePatchPolicy: should supply reviewed insert defaults", () => {
+    it("WebMCPAgentRecipePatchPolicy: should supply CyberChef insert defaults", () => {
         const changes = prepareAgentRecipeChanges([
             {type: "insert", operation: "To Hex"},
             {type: "insert", operation: "To Base32"},
@@ -32,14 +32,22 @@ TestRegister.addApiTests([
             operation: "Generate HOTP",
             arguments: ["Account", 6, 0],
         }]);
+        assert.deepStrictEqual(prepareAgentRecipeChanges([{
+            type: "insert",
+            operation: "ADD",
+        }]), [{
+            type: "insert",
+            operation: "ADD",
+            arguments: [{option: "Hex", string: ""}],
+        }]);
     }),
 
-    it("WebMCPAgentRecipePatchPolicy: should reject missing profiles and invalid arguments", () => {
+    it("WebMCPAgentRecipePatchPolicy: should reject unknown Operations and invalid arguments", () => {
         assert.throws(
-            () => prepareAgentRecipeChanges([{type: "insert", operation: "Register"}]),
+            () => prepareAgentRecipeChanges([{type: "insert", operation: "SECRET_UNKNOWN_OPERATION"}]),
             error => error instanceof RecipeTransactionError &&
-                error.code === RECIPE_TRANSACTION_ERROR_CODE.POLICY_BLOCKED &&
-                error.policyCode === "PROFILE_REQUIRED"
+                error.code === RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH &&
+                !error.message.includes("SECRET_UNKNOWN_OPERATION")
         );
         assert.throws(
             () => prepareAgentRecipeChanges([{
