@@ -152,6 +152,39 @@ TestRegister.addApiTests([
         assert.equal(validateToolInput(move, schema).valid, false);
     }),
 
+    it("WebMCPToolDefinitions: should accept native Recipe argument shapes", () => {
+        const schema = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH].inputSchema,
+            longValue = "x".repeat(16 * 1024 + 1),
+            changes = new Array(21).fill(null).map(() => ({
+                type: "disable",
+                stepId: "step-1",
+            }));
+        changes.push({
+            type: "insert",
+            operation: "Colossus",
+            arguments: new Array(57).fill("").map((value, index) =>
+                index === 56 ? longValue : value
+            ),
+        });
+        changes.push({
+            type: "setArgument",
+            stepId: "step-1",
+            argumentIndex: 56,
+            value: {option: "Hex", string: "01"},
+        });
+
+        assert.equal(validateToolInput({expectedRevision: 2, changes}, schema).valid, true);
+        assert.equal(validateToolInput({
+            expectedRevision: 2,
+            changes: [{
+                type: "setArgument",
+                stepId: "step-1",
+                argumentIndex: 0,
+                value: {option: "Hex", string: "01", extra: true},
+            }],
+        }, schema).valid, false);
+    }),
+
     it("WebMCPToolDefinitions: should match annotations to observable behavior", () => {
         assert.deepStrictEqual(TOOL_CONTRACTS[TOOL_NAME.SEARCH_OPERATIONS].annotations, {
             readOnlyHint: true,

@@ -1,5 +1,6 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
 import Ingredient from "../../core/Ingredient.mjs";
+import {copyToggleStringArgument} from "../recipe/RecipeArgument.mjs";
 
 const OPERATION_ARGUMENT_ERROR_CODE = Object.freeze({
     UNKNOWN_OPERATION: "UNKNOWN_OPERATION",
@@ -111,26 +112,6 @@ function resolveIngredientDefault(config) {
 
 
 /**
- * Validates the closed toggleString shape used by browser Recipe configuration.
- *
- * @param {*} value - Candidate toggleString value.
- * @param {Object} config - Generated Ingredient configuration.
- * @returns {boolean} Whether the value matches the visible Ingredient.
- */
-function isToggleStringValue(value, config) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    const prototype = Object.getPrototypeOf(value),
-        descriptors = Object.getOwnPropertyDescriptors(value),
-        keys = Reflect.ownKeys(descriptors);
-    return (prototype === Object.prototype || prototype === null) && keys.length === 2 &&
-        keys.every(key => typeof key === "string" && ["option", "string"].includes(key) &&
-            descriptors[key].enumerable && "value" in descriptors[key]) &&
-        typeof value.option === "string" && typeof value.string === "string" &&
-        Array.isArray(config.toggleValues) && config.toggleValues.includes(value.option);
-}
-
-
-/**
  * Normalizes one JSON Recipe argument to the value shape produced by the browser UI.
  *
  * @param {Object} config - Generated Ingredient configuration.
@@ -153,10 +134,12 @@ function normalizeIngredientValue(config, value) {
             {valid: true, value} : INVALID_VALUE;
     }
     if (config.type === "toggleString") {
-        return isToggleStringValue(value, config) ? {
-            valid: true,
-            value: Object.freeze({option: value.option, string: value.string}),
-        } : INVALID_VALUE;
+        const argument = copyToggleStringArgument(value);
+        return argument && Array.isArray(config.toggleValues) &&
+            config.toggleValues.includes(argument.option) ? {
+                valid: true,
+                value: argument,
+            } : INVALID_VALUE;
     }
     if (NAMED_OPTION_INGREDIENT_TYPES.has(config.type)) {
         return typeof value === "string" && getNamedOptions(config.value)

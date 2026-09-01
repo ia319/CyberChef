@@ -69,15 +69,6 @@ const APPROVAL_REQUEST_ID_SCHEMA = {
     description: "Opaque request identifier issued by CyberChef for the exact approved action.",
 };
 
-const ARGUMENT_VALUE_SCHEMA = {
-    anyOf: [
-        {type: "string", maxLength: 16 * 1024},
-        {type: "number"},
-        {type: "boolean"},
-    ],
-};
-
-
 /**
  * Creates an object schema that rejects undeclared properties.
  *
@@ -94,12 +85,25 @@ function closedObject(properties, required) {
     };
 }
 
+const TOGGLE_STRING_ARGUMENT_SCHEMA = closedObject({
+    option: {type: "string"},
+    string: {type: "string"},
+}, ["option", "string"]);
+
+const ARGUMENT_VALUE_SCHEMA = {
+    anyOf: [
+        {type: "string"},
+        {type: "number"},
+        {type: "boolean"},
+        TOGGLE_STRING_ARGUMENT_SCHEMA,
+    ],
+};
+
 const INSERT_PROPERTIES = {
     type: {type: "string", const: "insert"},
     operation: OPERATION_NAME_SCHEMA,
     arguments: {
         type: "array",
-        maxItems: 32,
         items: ARGUMENT_VALUE_SCHEMA,
         description: "Argument values for the inserted Operation.",
     },
@@ -155,7 +159,6 @@ const ARGUMENT_COMMAND_SCHEMA = closedObject({
     argumentIndex: {
         type: "integer",
         minimum: 0,
-        maximum: 31,
         description: "Zero-based Operation argument position.",
     },
     value: ARGUMENT_VALUE_SCHEMA,
@@ -232,7 +235,6 @@ const APPLY_RECIPE_PATCH_SCHEMA = closedObject({
     changes: {
         type: "array",
         minItems: 1,
-        maxItems: 20,
         description: "Ordered atomic changes to apply to the visible Recipe.",
         items: {
             oneOf: [
