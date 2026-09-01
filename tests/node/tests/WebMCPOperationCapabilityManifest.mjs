@@ -165,6 +165,7 @@ TestRegister.addApiTests([
             "From Octal",
             "From Punycode",
             "From Quoted Printable",
+            "Hex to PEM",
             "Normalise Unicode",
             "PEM to Hex",
             "ROT13",
@@ -232,10 +233,10 @@ TestRegister.addApiTests([
         }
 
         assert.deepStrictEqual(counts, {
-            safe: 60,
+            safe: 61,
             constrained: 1,
             denied: 9,
-            unreviewed: 434,
+            unreviewed: 433,
         });
     }),
 
