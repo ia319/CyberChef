@@ -5,10 +5,13 @@ import {
 } from "./OperationCapabilityManifest.mjs";
 import {getOperationPermissions} from "./OperationPermissions.mjs";
 import {
-    GOLDEN_RECIPE_RESOURCE_LIMITS,
     getOperationProfile,
     resolveOperationProfileArguments,
 } from "./OperationProfiles.mjs";
+import {
+    GOLDEN_RECIPE_RESOURCE_LIMITS,
+    estimateOperationOutputBytes,
+} from "./OperationResourcePolicy.mjs";
 
 const OPERATION_PREFLIGHT_VERSION = "1";
 const PREFLIGHT_MAX_REPORTED_ISSUES = 64;
@@ -202,10 +205,8 @@ function preflightOperationRecipe(recipe, activeInputBytes=null) {
                 addIssue(PREFLIGHT_ISSUE_CODE.STEP_INPUT_LIMIT, stepIndex);
             }
 
-            const rawEstimatedOutputBytes = Math.ceil(estimatedBytes * profile.resourceLimits.maxExpansionRatio),
-                estimatedOutputBytes = Number.isSafeInteger(rawEstimatedOutputBytes) ?
-                    Math.min(rawEstimatedOutputBytes, RESOURCE_OVERFLOW_BYTES) : RESOURCE_OVERFLOW_BYTES;
-            if (!Number.isSafeInteger(rawEstimatedOutputBytes) ||
+            const estimatedOutputBytes = estimateOperationOutputBytes(profile.resourceLimits, estimatedBytes);
+            if (estimatedOutputBytes >= RESOURCE_OVERFLOW_BYTES ||
                 estimatedOutputBytes > profile.resourceLimits.maxOutputBytes ||
                 estimatedOutputBytes > GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes) {
                 resourceAllowed = false;

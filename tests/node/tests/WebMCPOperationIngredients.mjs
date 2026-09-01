@@ -1,10 +1,21 @@
 import assert from "assert";
+import OperationConfig from "../../../src/core/config/OperationConfig.json" with { type: "json" };
 import {
     INGREDIENT_OPTION_MAX_LIMIT,
     UNSUPPORTED_INGREDIENT_REASON,
     describeOperationIngredients,
 } from "../../../src/web/webmcp/OperationIngredients.mjs";
 import { OPERATION_CATALOG } from "../../../src/web/webmcp/OperationCatalog.mjs";
+import { defineOperationProfile } from "../../../src/web/webmcp/OperationProfiles.mjs";
+import {
+    alphabetRule,
+    conditionalRule,
+    constantRule,
+    enumRule,
+    integerRule,
+    stringRule,
+} from "../../../src/web/webmcp/OperationProfileRules.mjs";
+import { linearResourceLimits } from "../../../src/web/webmcp/OperationResourcePolicy.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
@@ -90,6 +101,52 @@ TestRegister.addApiTests([
         }]);
         assert.equal(unprofiled.arguments[0].supportedForPatch, false);
         assert.equal(unprofiled.options[0].valueIncluded, false);
+    }),
+
+    it("WebMCPOperationIngredients: should describe finite Agent-only constraints", () => {
+        const profile = defineOperationProfile({
+                operationName: "To Bech32",
+                argumentRules: [
+                    stringRule(1, 16, 33, 126),
+                    enumRule(["Bech32", "Bech32m"]),
+                    enumRule(["Raw bytes", "Hex"]),
+                    enumRule(["Generic", "Bitcoin SegWit"]),
+                    conditionalRule(3, "Bitcoin SegWit", integerRule(0, 16), constantRule(0)),
+                ],
+                defaultArguments: ["bc", "Bech32", "Raw bytes", "Generic", 0],
+                argumentRelations: [],
+                sensitiveArgumentIndexes: [],
+                resourceLimits: linearResourceLimits(2, 16, 40, 90),
+                evidence: ["src/core/operations/ToBech32.mjs"],
+                reviewedOn: "2026-09-01",
+            }),
+            result = describeOperationIngredients(OperationConfig["To Bech32"].args, 0, 20, profile);
+
+        assert.equal(result.arguments[0].constraints.profileRule, "string");
+        assert.equal(result.arguments[0].constraints.minimumCharacterCodePoint, 33);
+        assert.equal(result.arguments[4].constraints.profileRule, "conditional");
+        assert.equal(result.arguments[4].constraints.argumentIndex, 3);
+        assert.equal(result.arguments[4].constraints.matched.minimum, 0);
+        assert.equal(result.arguments[4].constraints.matched.maximum, 16);
+        assert.equal(result.arguments[4].constraints.unmatched.constant, 0);
+
+        const alphabetProfile = defineOperationProfile({
+                operationName: "To Base58",
+                argumentRules: [alphabetRule(58, [
+                    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+                ])],
+                defaultArguments: ["123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"],
+                argumentRelations: [],
+                sensitiveArgumentIndexes: [],
+                resourceLimits: linearResourceLimits(2),
+                evidence: ["src/core/operations/ToBase58.mjs"],
+                reviewedOn: "2026-09-01",
+            }),
+            alphabet = describeOperationIngredients(OperationConfig["To Base58"].args, 0, 20, alphabetProfile);
+        assert.equal(alphabet.arguments[0].constraints.profileRule, "alphabet");
+        assert.equal(alphabet.arguments[0].constraints.expandedSymbolCount, 58);
+        assert.equal(alphabet.arguments[0].constraints.uniqueExpandedSymbols, true);
+        assert.equal(alphabet.options.length, 1);
     }),
 
     it("WebMCPOperationIngredients: should bound static text and large defaults", () => {

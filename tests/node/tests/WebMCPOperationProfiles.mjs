@@ -9,9 +9,24 @@ import {
     GOLDEN_RECIPE_RESOURCE_LIMITS,
     PROFILE_VALIDATION_CODE,
     TO_HEX_DELIMITERS,
+    defineOperationProfile,
     getOperationProfile,
     resolveOperationProfileArguments,
 } from "../../../src/web/webmcp/OperationProfiles.mjs";
+import {
+    alphabetRule,
+    booleanRule,
+    conditionalRule,
+    constantRule,
+    enumRule,
+    integerRule,
+    notInAlphabetRelation,
+    stringRule,
+} from "../../../src/web/webmcp/OperationProfileRules.mjs";
+import {
+    estimateOperationOutputBytes,
+    linearResourceLimits,
+} from "../../../src/web/webmcp/OperationResourcePolicy.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
@@ -50,6 +65,7 @@ TestRegister.addApiTests([
             );
             assert.equal(profile.defaultArguments.length, profile.argumentRules.length);
             assert.equal(profile.resourceLimits.complexity, "linear");
+            assert.equal(profile.resourceLimits.baseOutputBytes, 0);
             assert(profile.resourceLimits.maxExpansionRatio >= 1);
             assert(profile.resourceLimits.maxInputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes);
             assert(profile.resourceLimits.maxOutputBytes <= GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes);
@@ -102,5 +118,119 @@ TestRegister.addApiTests([
         assert.equal(resolveOperationProfileArguments(getOperationProfile("URL Encode"), [true]).valid, true);
         assert.equal(resolveOperationProfileArguments(getOperationProfile("URL Encode"), [0]).valid, false);
         assert.equal(resolveOperationProfileArguments(getOperationProfile("URL Encode"), null).valid, false);
+    }),
+
+    it("WebMCPOperationProfiles: should apply core validation before Agent restrictions", () => {
+        const profile = defineOperationProfile({
+            operationName: "From Binary",
+            argumentRules: [enumRule(["Space", "None"]), integerRule(1, 32)],
+            defaultArguments: ["Space", 8],
+            argumentRelations: [],
+            sensitiveArgumentIndexes: [],
+            resourceLimits: linearResourceLimits(1),
+            evidence: ["src/core/operations/FromBinary.mjs"],
+            reviewedOn: "2026-09-01",
+        });
+
+        assert.equal(resolveOperationProfileArguments(profile, ["Space", 8]).valid, true);
+        assert.deepStrictEqual(resolveOperationProfileArguments(profile, ["Space", 0]), {
+            valid: false,
+            code: PROFILE_VALIDATION_CODE.CORE_ARGUMENT_VALUE,
+        });
+        assert.deepStrictEqual(resolveOperationProfileArguments(profile, ["Space", 64]), {
+            valid: false,
+            code: PROFILE_VALIDATION_CODE.ARGUMENT_VALUE,
+        });
+        assert.deepStrictEqual(resolveOperationProfileArguments(profile, ["Space", 1.5]), {
+            valid: false,
+            code: PROFILE_VALIDATION_CODE.ARGUMENT_VALUE,
+        });
+    }),
+
+    it("WebMCPOperationProfiles: should enforce alphabet and cross-argument rules", () => {
+        const profile = defineOperationProfile({
+            operationName: "From Base85",
+            argumentRules: [
+                alphabetRule(85, ["!-u"]),
+                booleanRule(),
+                stringRule(0, 1, 0x20, 0x7e),
+            ],
+            defaultArguments: ["!-u", true, "z"],
+            argumentRelations: [notInAlphabetRelation(2, 0)],
+            sensitiveArgumentIndexes: [],
+            resourceLimits: linearResourceLimits(1),
+            evidence: ["src/core/operations/FromBase85.mjs"],
+            reviewedOn: "2026-09-01",
+        });
+
+        assert.equal(resolveOperationProfileArguments(profile).valid, true);
+        assert.equal(resolveOperationProfileArguments(profile, ["!-t", true, "z"]).valid, false);
+        assert.deepStrictEqual(resolveOperationProfileArguments(profile, ["!-tz", true, "z"]), {
+            valid: false,
+            code: PROFILE_VALIDATION_CODE.ARGUMENT_RELATION,
+        });
+        assert.equal(resolveOperationProfileArguments(profile, ["!-u", true, "😀"]).valid, false);
+    }),
+
+    it("WebMCPOperationProfiles: should enforce finite dependent rules", () => {
+        const profile = defineOperationProfile({
+            operationName: "To Bech32",
+            argumentRules: [
+                stringRule(1, 16, 33, 126),
+                enumRule(["Bech32", "Bech32m"]),
+                enumRule(["Raw bytes", "Hex"]),
+                enumRule(["Generic", "Bitcoin SegWit"]),
+                conditionalRule(3, "Bitcoin SegWit", integerRule(0, 16), constantRule(0)),
+            ],
+            defaultArguments: ["bc", "Bech32", "Raw bytes", "Generic", 0],
+            argumentRelations: [],
+            sensitiveArgumentIndexes: [0],
+            resourceLimits: linearResourceLimits(2, 16, 40, 90),
+            evidence: ["src/core/operations/ToBech32.mjs"],
+            reviewedOn: "2026-09-01",
+        });
+
+        assert.equal(resolveOperationProfileArguments(profile, [
+            "bc", "Bech32m", "Raw bytes", "Bitcoin SegWit", 16,
+        ]).valid, true);
+        assert.equal(resolveOperationProfileArguments(profile, [
+            "bc", "Bech32", "Raw bytes", "Generic", 1,
+        ]).valid, false);
+        assert.deepStrictEqual(profile.sensitiveArgumentIndexes, [0]);
+        assert.equal(Object.isFrozen(profile.sensitiveArgumentIndexes), true);
+    }),
+
+    it("WebMCPOperationProfiles: should reject open or non-data profile definitions", () => {
+        const valid = {
+            operationName: "URL Encode",
+            argumentRules: [booleanRule()],
+            defaultArguments: [false],
+            argumentRelations: [],
+            sensitiveArgumentIndexes: [],
+            resourceLimits: linearResourceLimits(3),
+            evidence: ["src/core/operations/URLEncode.mjs"],
+            reviewedOn: "2026-09-01",
+        };
+
+        assert.throws(() => defineOperationProfile({...valid, extra: true}), TypeError);
+        assert.throws(() => defineOperationProfile({...valid, operationName: "Missing"}), TypeError);
+        assert.throws(() => defineOperationProfile({...valid, argumentRules: [{type: "future"}]}), TypeError);
+        assert.throws(() => defineOperationProfile({...valid, defaultArguments: [NaN]}), TypeError);
+        assert.throws(() => defineOperationProfile({
+            ...valid,
+            resourceLimits: {...valid.resourceLimits, extra: true},
+        }), TypeError);
+        const inherited = Object.create({operationName: "URL Encode"});
+        Object.assign(inherited, valid);
+        assert.throws(() => defineOperationProfile(inherited), TypeError);
+    }),
+
+    it("WebMCPOperationProfiles: should estimate fixed and linear output costs", () => {
+        const limits = linearResourceLimits(2, 16, 40, 90);
+
+        assert.equal(estimateOperationOutputBytes(limits, 0), 16);
+        assert.equal(estimateOperationOutputBytes(limits, 20), 56);
+        assert.equal(estimateOperationOutputBytes(limits, Number.MAX_SAFE_INTEGER),
+            GOLDEN_RECIPE_RESOURCE_LIMITS.maxMaterializedBytes + 1);
     }),
 ]);

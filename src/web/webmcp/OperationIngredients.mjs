@@ -1,5 +1,5 @@
 import { sanitizeCatalogText } from "./CatalogText.mjs";
-import { PROFILE_ARGUMENT_RULE } from "./OperationProfiles.mjs";
+import { PROFILE_ARGUMENT_RULE } from "./OperationProfileRules.mjs";
 
 const INGREDIENT_DESCRIPTOR_VERSION = "1";
 const INGREDIENT_NAME_MAX_CODE_POINTS = 128;
@@ -226,7 +226,7 @@ function applyIngredientProfile(mappedIngredient, rule, defaultValue) {
             constant: rule.value,
         };
     } else if (rule.type === PROFILE_ARGUMENT_RULE.ENUM) {
-        valueType = "string";
+        valueType = typeof rule.values[0];
         constraints = {
             allowEmpty: false,
             profileRule: PROFILE_ARGUMENT_RULE.ENUM,
@@ -235,7 +235,71 @@ function applyIngredientProfile(mappedIngredient, rule, defaultValue) {
         optionItems = rule.values.map((value, sourceOptionIndex) => Object.freeze({
             argumentIndex: mappedIngredient.descriptor.argumentIndex,
             sourceOptionIndex,
+            label: sanitizeCatalogText(String(value), INGREDIENT_OPTION_TEXT_MAX_CODE_POINTS),
+            valueIncluded: true,
+            value,
+        }));
+    } else if (rule.type === PROFILE_ARGUMENT_RULE.INTEGER) {
+        valueType = "number";
+        constraints = {
+            allowEmpty: false,
+            profileRule: PROFILE_ARGUMENT_RULE.INTEGER,
+            finite: true,
+            integer: true,
+            minimum: rule.minimum,
+            maximum: rule.maximum,
+        };
+    } else if (rule.type === PROFILE_ARGUMENT_RULE.STRING) {
+        valueType = "string";
+        constraints = {
+            allowEmpty: rule.minimumCodePoints === 0,
+            profileRule: PROFILE_ARGUMENT_RULE.STRING,
+            minimumCodePoints: rule.minimumCodePoints,
+            maximumCodePoints: rule.maximumCodePoints,
+            minimumCharacterCodePoint: rule.minimumCharacterCodePoint,
+            maximumCharacterCodePoint: rule.maximumCharacterCodePoint,
+        };
+    } else if (rule.type === PROFILE_ARGUMENT_RULE.ALPHABET) {
+        valueType = "string";
+        constraints = {
+            allowEmpty: false,
+            profileRule: PROFILE_ARGUMENT_RULE.ALPHABET,
+            maximumCodePoints: rule.maximumExpressionCodePoints,
+            expandedSymbolCount: rule.symbolCount,
+            uniqueExpandedSymbols: true,
+            printableAscii: true,
+        };
+        optionItems = rule.presets.map((value, sourceOptionIndex) => Object.freeze({
+            argumentIndex: mappedIngredient.descriptor.argumentIndex,
+            sourceOptionIndex,
             label: sanitizeCatalogText(value, INGREDIENT_OPTION_TEXT_MAX_CODE_POINTS),
+            valueIncluded: true,
+            value,
+        }));
+    } else if (rule.type === PROFILE_ARGUMENT_RULE.CONDITIONAL) {
+        const matched = applyIngredientProfile(mappedIngredient, rule.matchedRule, defaultValue),
+            unmatched = applyIngredientProfile(mappedIngredient, rule.unmatchedRule, defaultValue);
+        if (matched.descriptor.valueType !== unmatched.descriptor.valueType) {
+            throw new TypeError("Conditional profile branches must use the same value type");
+        }
+        valueType = matched.descriptor.valueType;
+        constraints = {
+            allowEmpty: matched.descriptor.constraints.allowEmpty === true &&
+                unmatched.descriptor.constraints.allowEmpty === true,
+            profileRule: PROFILE_ARGUMENT_RULE.CONDITIONAL,
+            argumentIndex: rule.argumentIndex,
+            value: rule.value,
+            matched: matched.descriptor.constraints,
+            unmatched: unmatched.descriptor.constraints,
+        };
+        const values = [];
+        for (const option of matched.optionItems.concat(unmatched.optionItems)) {
+            if (!values.some(value => Object.is(value, option.value))) values.push(option.value);
+        }
+        optionItems = values.map((value, sourceOptionIndex) => Object.freeze({
+            argumentIndex: mappedIngredient.descriptor.argumentIndex,
+            sourceOptionIndex,
+            label: sanitizeCatalogText(String(value), INGREDIENT_OPTION_TEXT_MAX_CODE_POINTS),
             valueIncluded: true,
             value,
         }));
