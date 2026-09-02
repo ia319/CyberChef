@@ -148,6 +148,8 @@ class Chef {
         if (direction === "reverse") highlights.reverse();
 
         for (let i = 0; i < highlights.length; i++) {
+            if (!Array.isArray(pos) || !pos[0]) return false;
+
             // Remove multiple highlights before processing again
             pos = [pos[0]];
 
@@ -158,9 +160,11 @@ class Chef {
                     pos = func(pos, highlights[i].args);
                 } catch (err) {
                     // Throw away highlighting errors
-                    pos = [];
+                    return false;
                 }
             }
+
+            if (!Array.isArray(pos) || !pos[0]) return false;
         }
 
         return {

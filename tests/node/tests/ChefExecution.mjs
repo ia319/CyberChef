@@ -60,4 +60,49 @@ TestRegister.addApiTests([
             presenter: null,
         });
     }),
+
+    it("Chef highlights: should stop when an Operation lacks highlight support", async () => {
+        const result = await new Chef().calculateHighlights([
+            {
+                op: "XOR",
+                args: [{option: "Hex", string: "01"}, "Standard", false],
+            },
+            {
+                op: "To Hex",
+                args: ["Space", 0],
+            },
+            {
+                op: "Find / Replace",
+                args: [
+                    {option: "Simple string", string: " "},
+                    "",
+                    true,
+                    false,
+                    true,
+                    false,
+                ],
+            },
+            {
+                op: "To Base64",
+                args: ["A-Za-z0-9+/="],
+            },
+        ], "reverse", [{start: 0, end: 4}]);
+
+        assert.equal(result, false);
+    }),
+
+    it("Chef highlights: should stop when an Operation declines the current arguments", async () => {
+        const result = await new Chef().calculateHighlights([
+            {
+                op: "XOR",
+                args: [{option: "Hex", string: "01"}, "Standard", false],
+            },
+            {
+                op: "From Hex",
+                args: ["Auto"],
+            },
+        ], "forward", [{start: 0, end: 4}]);
+
+        assert.equal(result, false);
+    }),
 ]);

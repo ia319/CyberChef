@@ -356,7 +356,12 @@ class Recipe  {
             if (op.breakpoint) return false;
 
             // If any of the operations do not support highlighting, fail immediately.
-            if (op.highlight === false || op.highlight === undefined) return false;
+            if (typeof op.highlight !== "function" ||
+                typeof op.highlightReverse !== "function" ||
+                op.highlight === Operation.prototype.highlight ||
+                op.highlightReverse === Operation.prototype.highlightReverse) {
+                return false;
+            }
 
             highlights.push({
                 f: op.highlight,
