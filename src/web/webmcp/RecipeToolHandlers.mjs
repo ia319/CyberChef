@@ -11,6 +11,10 @@ import {
     ApprovalError,
 } from "./ApprovalCoordinator.mjs";
 import {createApprovalErrorContext} from "./ApprovalResultContext.mjs";
+import {
+    AGENT_ANALYSIS_ERROR_CODE,
+    AgentAnalysisError,
+} from "./AgentAnalysisError.mjs";
 import {ToolExecutionError} from "./ToolExecutor.mjs";
 import {TOOL_NAME} from "./ToolDefinitions.mjs";
 import {
@@ -107,9 +111,15 @@ function createRecipeApprovalAction(input, workspaceBinding) {
  * @param {Object} recipeWaiter - Recipe state and transaction service.
  * @param {Object|null} [runStateService=null] - Optional active Run state service.
  * @param {ApprovalCoordinator|null} [approvals=null] - Optional one-use approval owner.
+ * @param {AgentAnalysisService|null} [analysisService=null] - Optional Magic candidate owner.
  * @returns {Object} Handlers keyed by formal tool name.
  */
-function createRecipeToolHandlers(recipeWaiter, runStateService=null, approvals=null) {
+function createRecipeToolHandlers(
+    recipeWaiter,
+    runStateService=null,
+    approvals=null,
+    analysisService=null
+) {
     if (!recipeWaiter || typeof recipeWaiter.getReadProjection !== "function" ||
         typeof recipeWaiter.applyAgentPatch !== "function" ||
         runStateService !== null && typeof runStateService.getActiveState !== "function" ||
@@ -121,8 +131,44 @@ function createRecipeToolHandlers(recipeWaiter, runStateService=null, approvals=
             typeof recipeWaiter.prepareAgentPatch !== "function" ||
             typeof recipeWaiter.commitAgentPatch !== "function" ||
             typeof recipeWaiter.commitApprovedAgentPatch !== "function"
-        )) {
+        ) || analysisService !== null &&
+            typeof analysisService.resolveCandidatePatch !== "function") {
         throw new TypeError("Recipe tool handlers require the Recipe service");
+    }
+
+    /**
+     * Replaces one opaque Magic reference with its page-local exact Recipe changes.
+     *
+     * @param {Object} input - Schema-validated patch or candidate input.
+     * @param {Object} invocation - Active collaboration invocation guard.
+     * @returns {Object} Standard Recipe patch input for the shared transaction boundary.
+     */
+    function resolvePatchInput(input, invocation) {
+        if (typeof input.analysisCandidateId === "undefined") return input;
+        if (!analysisService) {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);
+        }
+
+        let patch;
+        try {
+            patch = analysisService.resolveCandidatePatch(
+                input.analysisCandidateId,
+                input.expectedRevision,
+                invocation.sessionEpoch
+            );
+        } catch (err) {
+            if (err instanceof AgentAnalysisError &&
+                err.code === AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS) {
+                throw new ToolExecutionError(TOOL_ERROR_CODE.STALE_OUTPUT_ANALYSIS);
+            }
+            throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);
+        }
+        return Object.freeze({
+            ...patch,
+            ...(typeof input.recipeApprovalRequestId === "string" ? {
+                recipeApprovalRequestId: input.recipeApprovalRequestId,
+            } : {}),
+        });
     }
 
     /**
@@ -193,23 +239,24 @@ function createRecipeToolHandlers(recipeWaiter, runStateService=null, approvals=
      */
     function applyRecipePatch(input, invocation) {
         invocation.checkpoint();
+        const patchInput = resolvePatchInput(input, invocation);
 
-        if (!approvals) return commitStandardPatch(input, invocation);
+        if (!approvals) return commitStandardPatch(patchInput, invocation);
 
         let preparedPatch;
         try {
-            preparedPatch = recipeWaiter.prepareAgentPatch(input);
+            preparedPatch = recipeWaiter.prepareAgentPatch(patchInput);
         } catch (err) {
             throw new ToolExecutionError(mapRecipeTransactionError(err));
         }
 
         if (preparedPatch.authorization?.approvalRequired !== true) {
-            if (typeof input.recipeApprovalRequestId !== "undefined") {
+            if (typeof patchInput.recipeApprovalRequestId !== "undefined") {
                 throw new ToolExecutionError(TOOL_ERROR_CODE.INVALID_REQUEST);
             }
             return commitPreparedStandardPatch(preparedPatch, invocation);
         }
-        return applyApprovedPatch(input, preparedPatch, invocation);
+        return applyApprovedPatch(patchInput, preparedPatch, invocation);
     }
 
     /**

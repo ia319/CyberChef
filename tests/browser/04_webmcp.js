@@ -897,6 +897,99 @@ module.exports = {
         browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
     },
 
+    "Output inspection isolates bounded Magic options": browser => {
+        browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
+        browser.executeAsync(async done => {
+            const app = window.app,
+                manager = app.manager;
+            try {
+                manager.controls.setAutoBake(false);
+                app.setRecipeConfig([]);
+                const inputView = manager.input.inputEditorView;
+                inputView.dispatch({
+                    changes: {
+                        from: 0,
+                        to: inputView.state.doc.length,
+                        insert: "48656c6c6f",
+                    },
+                });
+
+                const tools = await document.modelContext.getTools(),
+                    stateTool = tools.find(tool => tool.name === "get_recipe_state"),
+                    patchTool = tools.find(tool => tool.name === "apply_recipe_patch"),
+                    bakeTool = tools.find(tool => tool.name === "bake_recipe"),
+                    inspectTool = tools.find(tool => tool.name === "inspect_output"),
+                    state = await window.__invokeWebMCPTool(stateTool, {}),
+                    bake = await window.__invokeWebMCPTool(bakeTool, {
+                        expectedRevision: state.state.recipeRevision,
+                    }),
+                    matching = await window.__invokeWebMCPTool(inspectTool, {
+                        bakeId: bake.state.bakeId,
+                        depth: 1,
+                        intensiveMode: false,
+                        extensiveLanguageSupport: false,
+                        crib: "^Hello$",
+                    }),
+                    notMatching = await window.__invokeWebMCPTool(inspectTool, {
+                        bakeId: bake.state.bakeId,
+                        depth: 1,
+                        intensiveMode: false,
+                        extensiveLanguageSupport: false,
+                        crib: "^World$",
+                    }),
+                    candidate = matching.data?.candidates?.[0],
+                    candidatePatch = candidate ? await window.__invokeWebMCPTool(
+                        patchTool,
+                        {
+                            expectedRevision: matching.data.recipeRevision,
+                            analysisCandidateId: candidate.candidateId,
+                        }
+                    ) : null,
+                    config = manager.recipe.getConfig();
+
+                done({
+                    bake,
+                    matching,
+                    notMatching,
+                    candidatePatch,
+                    config,
+                    candidateParametersHidden: !JSON.stringify(matching).includes("\"None\""),
+                    containsCrib: /Hello|World/u.test(
+                        JSON.stringify({matching, notMatching, candidatePatch})
+                    ),
+                });
+            } catch (err) {
+                done({scriptError: {name: err.name, message: err.message}});
+            } finally {
+                manager.controls.setAutoBake(false);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.scriptError, undefined);
+            browser.assert.strictEqual(value.bake.ok, true);
+            browser.assert.strictEqual(value.matching.ok, true);
+            browser.assert.strictEqual(
+                value.matching.data.candidateOperationNames.includes("From Hex"),
+                true
+            );
+            browser.assert.strictEqual(value.matching.data.candidates.length > 0, true);
+            browser.assert.deepStrictEqual(
+                value.matching.data.candidates[0].operationNames,
+                ["From Hex"]
+            );
+            browser.assert.strictEqual(value.candidatePatch.ok, true);
+            browser.assert.strictEqual(value.config.length, 1);
+            browser.assert.strictEqual(value.config[0].op, "From Hex");
+            browser.assert.deepStrictEqual(value.config[0].args, ["None"]);
+            browser.assert.strictEqual(value.candidateParametersHidden, true);
+            browser.assert.strictEqual(
+                value.notMatching.error.code,
+                "ANALYSIS_EMPTY"
+            );
+            browser.assert.strictEqual(value.containsCrib, false);
+        });
+        browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
+    },
+
     "Stop cancels an exclusive Agent Run": browser => {
         browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
         browser.executeAsync(async done => {

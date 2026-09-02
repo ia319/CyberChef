@@ -1,3 +1,10 @@
+import {
+    MAX_MAGIC_ANALYSIS_CRIB_LENGTH,
+    MAX_MAGIC_ANALYSIS_DEPTH,
+} from "../analysis/AnalysisPolicy.mjs";
+import {ANALYSIS_CANDIDATE_ID_PATTERN} from "./AnalysisCandidateStore.mjs";
+
+
 const TOOL_NAME = Object.freeze({
     SEARCH_OPERATIONS: "search_operations",
     GET_OPERATION_DETAILS: "get_operation_details",
@@ -67,6 +74,12 @@ const APPROVAL_REQUEST_ID_SCHEMA = {
     type: "string",
     pattern: "^[A-Za-z0-9_-]{16,128}$",
     description: "Opaque request identifier issued by CyberChef for the exact approved action.",
+};
+
+const ANALYSIS_CANDIDATE_ID_SCHEMA = {
+    type: "string",
+    pattern: ANALYSIS_CANDIDATE_ID_PATTERN.source,
+    description: "Opaque reference to one exact Magic candidate returned by CyberChef.",
 };
 
 /**
@@ -229,26 +242,40 @@ const GET_RECIPE_STATE_SCHEMA = closedObject({
     },
 }, []);
 
-const APPLY_RECIPE_PATCH_SCHEMA = closedObject({
+const APPLY_RECIPE_PATCH_PROPERTIES = {
     expectedRevision: REVISION_SCHEMA,
     recipeApprovalRequestId: APPROVAL_REQUEST_ID_SCHEMA,
-    changes: {
-        type: "array",
-        minItems: 1,
-        description: "Ordered atomic changes to apply to the visible Recipe.",
-        items: {
-            oneOf: [
-                INSERT_COMMAND_SCHEMA,
-                REMOVE_COMMAND_SCHEMA,
-                MOVE_COMMAND_SCHEMA,
-                ENABLE_COMMAND_SCHEMA,
-                DISABLE_COMMAND_SCHEMA,
-                BREAKPOINT_COMMAND_SCHEMA,
-                ARGUMENT_COMMAND_SCHEMA,
-            ],
-        },
+};
+
+const APPLY_RECIPE_CHANGES_SCHEMA = {
+    type: "array",
+    minItems: 1,
+    description: "Ordered atomic changes to apply to the visible Recipe.",
+    items: {
+        oneOf: [
+            INSERT_COMMAND_SCHEMA,
+            REMOVE_COMMAND_SCHEMA,
+            MOVE_COMMAND_SCHEMA,
+            ENABLE_COMMAND_SCHEMA,
+            DISABLE_COMMAND_SCHEMA,
+            BREAKPOINT_COMMAND_SCHEMA,
+            ARGUMENT_COMMAND_SCHEMA,
+        ],
     },
-}, ["expectedRevision", "changes"]);
+};
+
+const APPLY_RECIPE_PATCH_SCHEMA = {
+    oneOf: [
+        closedObject({
+            ...APPLY_RECIPE_PATCH_PROPERTIES,
+            changes: APPLY_RECIPE_CHANGES_SCHEMA,
+        }, ["expectedRevision", "changes"]),
+        closedObject({
+            ...APPLY_RECIPE_PATCH_PROPERTIES,
+            analysisCandidateId: ANALYSIS_CANDIDATE_ID_SCHEMA,
+        }, ["expectedRevision", "analysisCandidateId"]),
+    ],
+};
 
 const BAKE_RECIPE_SCHEMA = closedObject({
     expectedRevision: REVISION_SCHEMA,
@@ -261,6 +288,25 @@ const INSPECT_OUTPUT_SCHEMA = closedObject({
         minimum: 1,
         maximum: Number.MAX_SAFE_INTEGER,
         description: "Completed Recipe run identifier returned by CyberChef.",
+    },
+    depth: {
+        type: "integer",
+        minimum: 0,
+        maximum: MAX_MAGIC_ANALYSIS_DEPTH,
+        description: "Maximum recursive Magic analysis depth. Defaults to 3.",
+    },
+    intensiveMode: {
+        type: "boolean",
+        description: "Enables bounded XOR, bit rotation, and character encoding analysis.",
+    },
+    extensiveLanguageSupport: {
+        type: "boolean",
+        description: "Enables comparison against the extended Magic language set.",
+    },
+    crib: {
+        type: "string",
+        maxLength: MAX_MAGIC_ANALYSIS_CRIB_LENGTH,
+        description: "Case-insensitive regular expression that retains matching Magic candidates.",
     },
 }, ["bakeId"]);
 
@@ -288,7 +334,7 @@ const TOOL_CONTRACTS = {
     },
     [TOOL_NAME.APPLY_RECIPE_PATCH]: {
         title: "Change the CyberChef Recipe",
-        description: "Applies an ordered set of supported changes atomically to the visible Recipe at the expected revision.",
+        description: "Applies ordered supported changes or one page-issued Magic candidate atomically to the visible Recipe at the expected revision.",
         inputSchema: APPLY_RECIPE_PATCH_SCHEMA,
         annotations: STATE_CHANGING_ANNOTATIONS,
         requiresSession: true,
@@ -302,7 +348,7 @@ const TOOL_CONTRACTS = {
     },
     [TOOL_NAME.INSPECT_OUTPUT]: {
         title: "Inspect CyberChef Output",
-        description: "Analyzes the current authorized Output locally, consumes a bounded session analysis slot when new work starts, and returns bounded user-derived signals for the completed run.",
+        description: "Analyzes the current authorized Output locally with bounded Magic options, consumes a session analysis slot when new work starts, and returns sanitized user-derived signals with ranked Magic candidate references; matching Operation names remain separate format checks.",
         inputSchema: INSPECT_OUTPUT_SCHEMA,
         annotations: UNTRUSTED_STATE_CHANGING_ANNOTATIONS,
         requiresSession: true,

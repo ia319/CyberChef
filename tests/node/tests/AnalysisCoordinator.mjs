@@ -77,6 +77,13 @@ TestRegister.addApiTests([
             owner: ANALYSIS_OWNER.AGENT,
             signal: abortController.signal,
         }), error => error.code === ANALYSIS_WAITER_ERROR_CODE.ABORTED);
+        assert.throws(() => coordinator.ensure(createTarget(), {
+            owner: ANALYSIS_OWNER.AGENT,
+            analysisVariantId: 0,
+        }), error => error.code === ANALYSIS_WAITER_ERROR_CODE.INVALID_ANALYSIS);
+        assert.throws(() => coordinator.getDecision(createTarget(), 0),
+            error => error.code === ANALYSIS_WAITER_ERROR_CODE.INVALID_ANALYSIS
+        );
     }),
 
     it("AnalysisCoordinator: should join matching work and reject a different active target", async () => {
@@ -88,6 +95,10 @@ TestRegister.addApiTests([
             busyDecision = coordinator.getDecision(createTarget({outputVersion: 6})),
             busy = coordinator.ensure(createTarget({outputVersion: 6}), {
                 owner: ANALYSIS_OWNER.AGENT,
+            }),
+            variantBusy = coordinator.ensure(createTarget(), {
+                owner: ANALYSIS_OWNER.AGENT,
+                analysisVariantId: 2,
             });
 
         assert.deepStrictEqual(initialDecision, {
@@ -102,6 +113,7 @@ TestRegister.addApiTests([
         assert.equal(joined.decision, ANALYSIS_DECISION.JOINED);
         assert.equal(joined.analysis.analysisId, started.analysis.analysisId);
         assert.equal(busy.decision, ANALYSIS_DECISION.BUSY);
+        assert.equal(variantBusy.decision, ANALYSIS_DECISION.BUSY);
         assert.equal(coordinator.markRunning(started.analysis.analysisId), true);
         assert.equal(coordinator.markRunning(started.analysis.analysisId), false);
         assert.equal(coordinator.settle(
@@ -137,6 +149,17 @@ TestRegister.addApiTests([
             assert.equal(cached.decision, ANALYSIS_DECISION.CACHED);
             assert.equal(cached.analysis.analysisId, started.analysis.analysisId);
             assert.strictEqual((await cached.completion).value, value);
+
+            const differentVariant = coordinator.ensure(createTarget(), {
+                owner: ANALYSIS_OWNER.AGENT,
+                analysisVariantId: 2,
+            });
+            assert.equal(differentVariant.decision, ANALYSIS_DECISION.STARTED);
+            coordinator.settle(
+                differentVariant.analysis.analysisId,
+                ANALYSIS_STATE.CANCELLED
+            );
+            await differentVariant.completion;
         }
     }),
 

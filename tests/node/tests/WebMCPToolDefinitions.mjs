@@ -51,7 +51,13 @@ const VALID_INPUTS = Object.freeze({
         expectedRevision: 2,
         bakeApprovalRequestId: "approval-request-1",
     },
-    [TOOL_NAME.INSPECT_OUTPUT]: {bakeId: 7},
+    [TOOL_NAME.INSPECT_OUTPUT]: {
+        bakeId: 7,
+        depth: 2,
+        intensiveMode: true,
+        extensiveLanguageSupport: true,
+        crib: "known text",
+    },
 });
 
 const assertDeeplyFrozen = value => {
@@ -150,6 +156,24 @@ TestRegister.addApiTests([
 
         assert.equal(validateToolInput(insert, schema).valid, false);
         assert.equal(validateToolInput(move, schema).valid, false);
+    }),
+
+    it("WebMCPToolDefinitions: should accept one exclusive Magic candidate reference", () => {
+        const schema = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH].inputSchema,
+            candidateInput = {
+                expectedRevision: 2,
+                analysisCandidateId: "analysis-candidate-1",
+            };
+
+        assert.equal(validateToolInput(candidateInput, schema).valid, true);
+        assert.equal(validateToolInput({
+            ...candidateInput,
+            changes: [{type: "insert", operation: "From Hex"}],
+        }, schema).valid, false);
+        assert.equal(validateToolInput({
+            expectedRevision: 2,
+            analysisCandidateId: "short",
+        }, schema).valid, false);
     }),
 
     it("WebMCPToolDefinitions: should accept native Recipe argument shapes", () => {

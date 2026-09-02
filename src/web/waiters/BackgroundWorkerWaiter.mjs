@@ -8,20 +8,27 @@ import ChefWorker from "worker-loader?inline=no-fallback!../../core/ChefWorker.j
 import {
     MAX_ANALYSIS_CANDIDATES,
     MAX_ANALYSIS_SAMPLE_BYTES,
+    createMagicAnalysisOptions,
 } from "../analysis/AnalysisPolicy.mjs";
 import {
     ANALYSIS_DECISION,
     ANALYSIS_OWNER,
     ANALYSIS_STATE,
+    DEFAULT_ANALYSIS_VARIANT_ID,
     analysisTargetMatches,
     createAnalysisTarget,
 } from "../analysis/AnalysisCoordinator.mjs";
+
+
+const MAX_MAGIC_ANALYSIS_VARIANTS = 64;
 
 
 /**
  * Waiter to handle conversations with a ChefWorker in the background.
  */
 class BackgroundWorkerWaiter {
+    #magicAnalysisVariantIds = new Map();
+    #nextMagicAnalysisVariantId = DEFAULT_ANALYSIS_VARIANT_ID;
 
     /**
      * BackgroundWorkerWaiter constructor.
@@ -188,6 +195,58 @@ class BackgroundWorkerWaiter {
 
 
     /**
+     * Resolves one validated Magic configuration to a content-free cache identity.
+     *
+     * @param {Object} provenance - Fresh Output provenance that produced the sample.
+     * @param {Object} options - Candidate Magic analysis options.
+     * @returns {Object} Immutable target, options, and variant identity.
+     */
+    #prepareMagicAnalysis(provenance, options) {
+        const normalized = createMagicAnalysisOptions(options),
+            key = JSON.stringify([
+                normalized.depth,
+                normalized.intensiveMode,
+                normalized.extensiveLanguageSupport,
+                normalized.crib,
+            ]);
+        let analysisVariantId = this.#magicAnalysisVariantIds.get(key);
+        if (analysisVariantId === undefined) {
+            if (this.#nextMagicAnalysisVariantId === Number.MAX_SAFE_INTEGER) {
+                throw new RangeError("Magic analysis variant identity limit reached");
+            }
+            if (this.#magicAnalysisVariantIds.size === MAX_MAGIC_ANALYSIS_VARIANTS) {
+                this.#magicAnalysisVariantIds.delete(
+                    this.#magicAnalysisVariantIds.keys().next().value
+                );
+            }
+            analysisVariantId = this.#nextMagicAnalysisVariantId++;
+            this.#magicAnalysisVariantIds.set(key, analysisVariantId);
+        }
+        return Object.freeze({
+            analysisVariantId,
+            options: normalized,
+            target: createAnalysisTarget(provenance),
+        });
+    }
+
+
+    /**
+     * Reports whether one Magic configuration can reuse or start Output analysis.
+     *
+     * @param {Object} provenance - Fresh Output provenance that produced the sample.
+     * @param {Object} [options={}] - Candidate Magic analysis options.
+     * @returns {Object} Analysis scheduling decision.
+     */
+    getMagicDecision(provenance, options={}) {
+        const prepared = this.#prepareMagicAnalysis(provenance, options);
+        return this.manager.analyses.getDecision(
+            prepared.target,
+            prepared.analysisVariantId
+        );
+    }
+
+
+    /**
      * Asks the ChefWorker to bake the input using the specified recipe.
      *
      * @param {string} input
@@ -232,23 +291,34 @@ class BackgroundWorkerWaiter {
      * @param {Object} provenance - Fresh Output provenance that produced the sample.
      * @param {string} [owner=ANALYSIS_OWNER.UI] - Trusted analysis owner.
      * @param {AbortSignal|null} [signal=null] - Optional owner cancellation signal.
+     * @param {Object} [options={}] - Bounded Magic analysis options.
      * @returns {Object} Coordinator decision and optional completion Promise.
      */
-    magic(input, provenance, owner=ANALYSIS_OWNER.UI, signal=null) {
+    magic(input, provenance, owner=ANALYSIS_OWNER.UI, signal=null, options={}) {
         if (!(input instanceof ArrayBuffer) || input.byteLength < 1 ||
             input.byteLength > MAX_ANALYSIS_SAMPLE_BYTES) {
             throw new TypeError("Analysis sample is invalid");
         }
-        const target = createAnalysisTarget(provenance);
+        const prepared = this.#prepareMagicAnalysis(provenance, options),
+            target = prepared.target;
         this.invalidateAnalysis(target);
-        const request = this.manager.analyses.ensure(target, {owner, signal});
+        const request = this.manager.analyses.ensure(target, {
+            owner,
+            signal,
+            analysisVariantId: prepared.analysisVariantId,
+        });
         if (request.decision !== ANALYSIS_DECISION.STARTED) return request;
 
         try {
             const workerRequestId = this.bake(input, [
                 {
                     "op": "Magic",
-                    "args": [3, false, false]
+                    "args": [
+                        prepared.options.depth,
+                        prepared.options.intensiveMode,
+                        prepared.options.extensiveLanguageSupport,
+                        prepared.options.crib,
+                    ]
                 }
             ], {}, 0, false, this.magicComplete, target.recipeRevision);
             this.activeAnalysis = {

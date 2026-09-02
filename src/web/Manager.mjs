@@ -125,7 +125,12 @@ class Manager {
             ACTIVE_BUILD_PROFILE,
             {
                 ...OPERATION_TOOL_HANDLERS,
-                ...createRecipeToolHandlers(this.recipe, runStateService, this.approvals),
+                ...createRecipeToolHandlers(
+                    this.recipe,
+                    runStateService,
+                    this.approvals,
+                    this.agentAnalysis
+                ),
                 ...createBakeRecipeToolHandlers(this.agentBake, this.approvals),
                 ...createInspectOutputToolHandlers(this.agentAnalysis),
             }
@@ -143,16 +148,20 @@ class Manager {
         this.webmcp.session.addEventListener("change", () => {
             if (this.webmcp.session.getState().state !== COLLABORATION_SESSION_STATE.ACTIVE) {
                 this.approvals.invalidate(APPROVAL_END_REASON.SESSION_ENDED);
+                this.agentAnalysis.invalidateCandidates();
             }
         });
         window.addEventListener("pagehide", () => {
             this.approvals.invalidate(APPROVAL_END_REASON.PAGE_LIFECYCLE);
+            this.agentAnalysis.invalidateCandidates();
         });
         window.addEventListener("statechange", () => {
             this.approvals.invalidate(APPROVAL_END_REASON.INPUT_CHANGED);
+            this.agentAnalysis.invalidateCandidates();
         });
         window.addEventListener("workspaceviewchange", () => {
             this.approvals.invalidate(APPROVAL_END_REASON.OUTPUT_TARGET_CHANGED);
+            this.agentAnalysis.invalidateCandidates();
         });
         window.addEventListener("recipechange", event => {
             const approval = this.approvals.getState(),
@@ -163,6 +172,7 @@ class Manager {
             if (!expectedApprovedCommit) {
                 this.approvals.invalidate(APPROVAL_END_REASON.RECIPE_CHANGED);
             }
+            this.agentAnalysis.invalidateCandidates();
         });
 
         // Object to store dynamic handlers to fire on elements that may not exist yet

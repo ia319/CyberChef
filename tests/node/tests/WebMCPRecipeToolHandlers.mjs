@@ -5,6 +5,10 @@ import {
     ApprovalCoordinator,
 } from "../../../src/web/webmcp/ApprovalCoordinator.mjs";
 import CollaborationSession from "../../../src/web/webmcp/CollaborationSession.mjs";
+import {
+    AGENT_ANALYSIS_ERROR_CODE,
+    AgentAnalysisError,
+} from "../../../src/web/webmcp/AgentAnalysisError.mjs";
 import {createRecipeToolHandlers} from "../../../src/web/webmcp/RecipeToolHandlers.mjs";
 import {
     RECIPE_TRANSACTION_ERROR_CODE,
@@ -330,6 +334,103 @@ TestRegister.addApiTests([
         assert.equal(serialized.includes(argumentCanary), false);
         assert.equal(serialized.includes("To Base64"), false);
         assert.equal(serialized.includes("From Base64"), false);
+    }),
+
+    it("WebMCPRecipeToolHandlers: should apply one exact internal Magic candidate", async () => {
+        const candidateId = "analysis-candidate-1",
+            session = new CollaborationSession(true, () => "candidate-session"),
+            analysisService = {
+                resolveCandidatePatch: (receivedId, revision, sessionEpoch) => {
+                    assert.equal(receivedId, candidateId);
+                    assert.equal(revision, 7);
+                    assert.equal(sessionEpoch, "candidate-session");
+                    return {
+                        expectedRevision: revision,
+                        changes: [{
+                            type: "insert",
+                            operation: "From Hex",
+                            arguments: [DATA_CANARIES[8]],
+                        }],
+                    };
+                },
+            },
+            recipeWaiter = {
+                getReadProjection: () => createProjection(),
+                applyAgentPatch: input => {
+                    assert.deepStrictEqual(input, {
+                        expectedRevision: 7,
+                        changes: [{
+                            type: "insert",
+                            operation: "From Hex",
+                            arguments: [DATA_CANARIES[8]],
+                        }],
+                    });
+                    return {
+                        status: RECIPE_TRANSACTION_STATUS.COMMITTED,
+                        recipeRevision: 8,
+                        insertedSteps: [{commandIndex: 0, stepId: "transaction-step-1"}],
+                        change: {
+                            actions: [{
+                                commandIndex: 0,
+                                type: "insert",
+                                operationName: "From Hex",
+                                stepId: "transaction-step-1",
+                            }],
+                        },
+                    };
+                },
+            },
+            handler = createRecipeToolHandlers(
+                recipeWaiter,
+                null,
+                null,
+                analysisService
+            )[TOOL_NAME.APPLY_RECIPE_PATCH];
+        session.start();
+
+        const result = await executeTool(
+                TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH],
+                (value, signal) => session.execute(handler, value, signal),
+                {expectedRevision: 7, analysisCandidateId: candidateId}
+            ),
+            serialized = JSON.stringify(result);
+
+        assert.equal(result.ok, true);
+        assert.equal(result.state.recipeRevision, 8);
+        assert.equal(serialized.includes(candidateId), false);
+        assert.equal(serialized.includes(DATA_CANARIES[8]), false);
+    }),
+
+    it("WebMCPRecipeToolHandlers: should reject a stale Magic candidate", async () => {
+        const session = new CollaborationSession(true, () => "candidate-session"),
+            recipeWaiter = {
+                getReadProjection: () => createProjection(),
+                applyAgentPatch: () => {
+                    throw new Error("Stale candidates must not reach the Recipe transaction");
+                },
+            },
+            analysisService = {
+                resolveCandidatePatch: () => {
+                    throw new AgentAnalysisError(
+                        AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS
+                    );
+                },
+            },
+            handler = createRecipeToolHandlers(
+                recipeWaiter,
+                null,
+                null,
+                analysisService
+            )[TOOL_NAME.APPLY_RECIPE_PATCH];
+        session.start();
+
+        const result = await executeTool(
+            TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH],
+            (value, signal) => session.execute(handler, value, signal),
+            {expectedRevision: 7, analysisCandidateId: "analysis-candidate-1"}
+        );
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.STALE_OUTPUT_ANALYSIS);
     }),
 
     it("WebMCPRecipeToolHandlers: should keep the largest patch summary within the result budget", () => {
