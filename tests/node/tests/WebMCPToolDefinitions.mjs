@@ -118,6 +118,36 @@ TestRegister.addApiTests([
         }
     }),
 
+    it("WebMCPToolDefinitions: should describe Magic hypotheses and approval reuse", () => {
+        const applyContract = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH],
+            bakeContract = TOOL_CONTRACTS[TOOL_NAME.BAKE_RECIPE],
+            inspectContract = TOOL_CONTRACTS[TOOL_NAME.INSPECT_OUTPUT],
+            candidateDescription = applyContract.inputSchema.oneOf[1]
+                .properties.analysisCandidateId.description;
+
+        assert.match(candidateDescription, /Recipe hypothesis produced by heuristic Magic analysis/u);
+        assert.match(applyContract.description, /Magic Recipe hypothesis/u);
+        assert.match(applyContract.description, /same ID for bake_recipe/u);
+        assert.match(bakeContract.description, /same approvalRequestId is supplied as bakeApprovalRequestId/u);
+        for (const schema of applyContract.inputSchema.oneOf) {
+            assert.match(
+                schema.properties.recipeApprovalRequestId.description,
+                /approvalRequestId returned by CyberChef/u
+            );
+        }
+        assert.match(
+            bakeContract.inputSchema.properties.bakeApprovalRequestId.description,
+            /same approvalRequestId supplied as recipeApprovalRequestId/u
+        );
+        assert.match(inspectContract.description, /heuristically ranked Recipe hypotheses/u);
+        assert.match(inspectContract.description, /signalsReady means those signals are available/u);
+        assert.match(inspectContract.description, /empty candidates array/u);
+        assert.match(inspectContract.description, /Different options can start another analysis/u);
+        assert.match(inspectContract.description, /at most eight new analyses/u);
+        assert.match(inspectContract.description, /started analyses count even if they fail or time out/u);
+        assert.match(inspectContract.description, /cached or joined requests do not/u);
+    }),
+
     it("WebMCPToolDefinitions: should validate one supported input for every tool", () => {
         for (const name of FORMAL_TOOL_NAMES) {
             const result = validateToolInput(VALID_INPUTS[name], TOOL_CONTRACTS[name].inputSchema);

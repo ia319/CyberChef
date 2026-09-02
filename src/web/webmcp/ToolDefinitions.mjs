@@ -70,16 +70,22 @@ const REVISION_SCHEMA = {
     description: "Recipe revision previously returned by CyberChef.",
 };
 
-const APPROVAL_REQUEST_ID_SCHEMA = {
+const RECIPE_APPROVAL_REQUEST_ID_SCHEMA = {
     type: "string",
     pattern: "^[A-Za-z0-9_-]{16,128}$",
-    description: "Opaque request identifier issued by CyberChef for the exact approved action.",
+    description: "Resubmits the approvalRequestId returned by CyberChef for the exact Recipe change; Apply and Bake once preserves it for bakeApprovalRequestId.",
+};
+
+const BAKE_APPROVAL_REQUEST_ID_SCHEMA = {
+    type: "string",
+    pattern: "^[A-Za-z0-9_-]{16,128}$",
+    description: "Reuses the same approvalRequestId supplied as recipeApprovalRequestId to consume the one Bake granted by Apply and Bake once.",
 };
 
 const ANALYSIS_CANDIDATE_ID_SCHEMA = {
     type: "string",
     pattern: ANALYSIS_CANDIDATE_ID_PATTERN.source,
-    description: "Opaque reference to one exact Magic candidate returned by CyberChef.",
+    description: "Opaque reference to one page-stored Recipe hypothesis produced by heuristic Magic analysis.",
 };
 
 /**
@@ -244,7 +250,7 @@ const GET_RECIPE_STATE_SCHEMA = closedObject({
 
 const APPLY_RECIPE_PATCH_PROPERTIES = {
     expectedRevision: REVISION_SCHEMA,
-    recipeApprovalRequestId: APPROVAL_REQUEST_ID_SCHEMA,
+    recipeApprovalRequestId: RECIPE_APPROVAL_REQUEST_ID_SCHEMA,
 };
 
 const APPLY_RECIPE_CHANGES_SCHEMA = {
@@ -279,7 +285,7 @@ const APPLY_RECIPE_PATCH_SCHEMA = {
 
 const BAKE_RECIPE_SCHEMA = closedObject({
     expectedRevision: REVISION_SCHEMA,
-    bakeApprovalRequestId: APPROVAL_REQUEST_ID_SCHEMA,
+    bakeApprovalRequestId: BAKE_APPROVAL_REQUEST_ID_SCHEMA,
 }, ["expectedRevision"]);
 
 const INSPECT_OUTPUT_SCHEMA = closedObject({
@@ -334,21 +340,21 @@ const TOOL_CONTRACTS = {
     },
     [TOOL_NAME.APPLY_RECIPE_PATCH]: {
         title: "Change the CyberChef Recipe",
-        description: "Applies ordered supported changes or one page-issued Magic candidate atomically to the visible Recipe at the expected revision.",
+        description: "Applies ordered supported changes or one page-issued Magic Recipe hypothesis atomically to the visible Recipe at the expected revision. A sensitive change first returns an approvalRequestId; the same request resubmits it as recipeApprovalRequestId after user approval. Apply and Bake once preserves the same ID for bake_recipe.",
         inputSchema: APPLY_RECIPE_PATCH_SCHEMA,
         annotations: STATE_CHANGING_ANNOTATIONS,
         requiresSession: true,
     },
     [TOOL_NAME.BAKE_RECIPE]: {
         title: "Run the CyberChef Recipe",
-        description: "Runs the authorized active Input with the exact visible Recipe revision, consumes local compute resources, and updates the visible Output.",
+        description: "Runs the authorized active Input with the exact visible Recipe revision, consumes local compute resources, and updates the visible Output. After Apply and Bake once, the same approvalRequestId is supplied as bakeApprovalRequestId to consume the one approved Bake.",
         inputSchema: BAKE_RECIPE_SCHEMA,
         annotations: STATE_CHANGING_ANNOTATIONS,
         requiresSession: true,
     },
     [TOOL_NAME.INSPECT_OUTPUT]: {
         title: "Inspect CyberChef Output",
-        description: "Analyzes the current authorized Output locally with bounded Magic options, consumes a session analysis slot when new work starts, and returns sanitized user-derived signals with ranked Magic candidate references; matching Operation names remain separate format checks.",
+        description: "Analyzes the current authorized Output with bounded Magic options. Returns sanitized signals, format matches, and page-issued references to heuristically ranked Recipe hypotheses. signalsReady means those signals are available; an empty candidates array means no applicable Recipe reference. Different options can start another analysis. Each collaboration session permits at most eight new analyses; started analyses count even if they fail or time out, while cached or joined requests do not.",
         inputSchema: INSPECT_OUTPUT_SCHEMA,
         annotations: UNTRUSTED_STATE_CHANGING_ANNOTATIONS,
         requiresSession: true,
