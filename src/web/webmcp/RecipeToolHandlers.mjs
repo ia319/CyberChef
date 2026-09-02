@@ -374,11 +374,15 @@ function createRecipeToolHandlers(
         try {
             commit = recipeWaiter.commitApprovedAgentPatch(preparedPatch, includeBakeTarget);
         } catch (err) {
-            await approvals.completeMutation({
-                requestId: input.recipeApprovalRequestId,
-                sessionEpoch: invocation.sessionEpoch,
-                succeeded: false,
-            });
+            try {
+                await approvals.completeMutation({
+                    requestId: input.recipeApprovalRequestId,
+                    sessionEpoch: invocation.sessionEpoch,
+                    succeeded: false,
+                });
+            } catch {
+                // Preserve the Recipe transaction failure after concurrent invalidation.
+            }
             throw new ToolExecutionError(mapRecipeTransactionError(err));
         }
 

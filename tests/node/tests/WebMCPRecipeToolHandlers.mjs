@@ -576,6 +576,70 @@ TestRegister.addApiTests([
         assert.equal(fixture.getCommitCount(), 0);
     }),
 
+    it("WebMCPRecipeToolHandlers: should preserve a commit failure when settlement fails", async () => {
+        let settlementCount = 0;
+        const settlementCanary = "SECRET_SETTLEMENT_ERROR_CANARY",
+            approvals = {
+                requestApproval: async () => {
+                    throw new Error("Approval request path must remain unused");
+                },
+                consumeMutation: async () => ({
+                    mode: APPROVAL_MODE.RECIPE_ONLY,
+                    signal: new AbortController().signal,
+                }),
+                completeMutation: async () => {
+                    settlementCount++;
+                    throw new Error(settlementCanary);
+                },
+                getState: () => ({state: APPROVAL_STATE.MUTATION_CONSUMED}),
+            },
+            recipeWaiter = {
+                getReadProjection: () => createProjection(),
+                applyAgentPatch: () => {
+                    throw new Error("Legacy patch path must remain unused");
+                },
+                prepareAgentPatch: () => Object.freeze({
+                    authorization: Object.freeze({
+                        approvalRequired: true,
+                        approvalSummary: Object.freeze({
+                            operationNames: Object.freeze(["Generate HOTP"]),
+                            changeTypes: Object.freeze(["insert"]),
+                            sensitiveParameterNames: Object.freeze(["Secret"]),
+                            riskFlags: Object.freeze(["secretInput"]),
+                        }),
+                    }),
+                    workspaceBinding: Object.freeze({recipeRevisionAtStart: 7}),
+                }),
+                commitAgentPatch: () => {
+                    throw new Error("Standard patch path must remain unused");
+                },
+                commitApprovedAgentPatch: () => {
+                    throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
+                },
+            },
+            handler = createRecipeToolHandlers(
+                recipeWaiter,
+                null,
+                approvals
+            )[TOOL_NAME.APPLY_RECIPE_PATCH],
+            session = new CollaborationSession(true, () => "session-approval-1");
+        session.start();
+
+        const result = await executeTool(
+            TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH],
+            (value, signal) => session.execute(handler, value, signal),
+            {
+                expectedRevision: 7,
+                recipeApprovalRequestId: "approval-request-1",
+                changes: [{type: "insert", operation: "Generate HOTP"}],
+            }
+        );
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.BAKE_BUSY);
+        assert.equal(settlementCount, 1);
+        assert.equal(JSON.stringify(result).includes(settlementCanary), false);
+    }),
+
     it("WebMCPRecipeToolHandlers: should map transaction failures without returning diagnostics", () => {
         const cases = [
             [new RecipeTransactionError(
