@@ -166,7 +166,12 @@ function createBakeRecipeToolHandlers(bakeService, approvals=null) {
             }
             throw err;
         }
-        invocation.checkpoint();
+        try {
+            invocation.checkpoint();
+        } catch (err) {
+            settleApprovedBake(input.bakeApprovalRequestId, invocation.sessionEpoch, false);
+            throw err;
+        }
 
         const combined = combineBakeSignals(invocation.signal, permit.signal);
         let result;

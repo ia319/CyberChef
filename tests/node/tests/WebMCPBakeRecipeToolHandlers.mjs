@@ -94,16 +94,18 @@ function createPreparedTarget() {
  * @param {Object} service - Agent Bake service fixture.
  * @param {Object} [input={expectedRevision: 7}] - Tool input.
  * @param {ApprovalCoordinator|null} [approvals=null] - Optional approval owner.
+ * @param {Object|undefined} [options] - Optional host invocation options.
  * @returns {Promise<Object>} Final tool result envelope.
  */
-async function executeBake(service, input={expectedRevision: 7}, approvals=null) {
+async function executeBake(service, input={expectedRevision: 7}, approvals=null, options) {
     const handler = createBakeRecipeToolHandlers(service, approvals)[TOOL_NAME.BAKE_RECIPE],
         session = new CollaborationSession(true, () => 5);
     session.start();
     return await executeTool(
         TOOL_CONTRACTS[TOOL_NAME.BAKE_RECIPE],
         (value, signal) => session.execute(handler, value, signal),
-        input
+        input,
+        options
     );
 }
 
@@ -336,6 +338,59 @@ TestRegister.addApiTests([
         assert.equal(result.error.code, TOOL_ERROR_CODE.BAKE_FAILED);
         assert.equal(approvals.getState().state, APPROVAL_STATE.CANCELLED);
         assert.equal(JSON.stringify(result).includes(DATA_CANARIES[1]), false);
+    }),
+
+    it("WebMCPBakeRecipeToolHandlers: should settle approval after invocation cancellation", async () => {
+        let requestNumber = 0,
+            commitCount = 0;
+        const approvals = new ApprovalCoordinator({
+                idFactory: () => `approval-request-${++requestNumber}`,
+            }),
+            target = createPreparedTarget(),
+            requestId = await approveBake(approvals, target),
+            invocationController = new AbortController(),
+            approvalBoundary = {
+                consumeBake: async options => {
+                    const permit = await approvals.consumeBake(options);
+                    invocationController.abort(new DOMException("Invocation cancelled", "AbortError"));
+                    return permit;
+                },
+                completeBake: (...args) => approvals.completeBake(...args),
+                getState: () => approvals.getState(),
+            },
+            service = {
+                ensureActiveBake: async () => {
+                    throw new Error("Standard Bake path must remain unused");
+                },
+                prepareActiveBake: async () => Object.freeze({target}),
+                commitPreparedBake: async () => {
+                    commitCount++;
+                    return createBakeResult();
+                },
+            };
+
+        await assert.rejects(
+            executeBake(service, {
+                expectedRevision: 7,
+                bakeApprovalRequestId: requestId,
+            }, approvalBoundary, {signal: invocationController.signal}),
+            error => error instanceof DOMException && error.name === "AbortError"
+        );
+        assert.equal(commitCount, 0);
+        assert.equal(approvals.getState().state, APPROVAL_STATE.CANCELLED);
+
+        const next = await approvals.requestApproval({
+            sessionEpoch: 5,
+            action: {kind: "recipeMutation", expectedRevision: 7},
+            summary: {
+                operationNames: ["Generate HOTP"],
+                changeTypes: ["insert"],
+                sensitiveParameterNames: ["Secret"],
+                riskFlags: ["secretInput"],
+            },
+        });
+        assert.equal(next.requestId, "approval-request-2");
+        assert.equal(next.state, APPROVAL_STATE.PENDING);
     }),
 
     it("WebMCPBakeRecipeToolHandlers: should preserve approved pre-Run failures", async () => {
