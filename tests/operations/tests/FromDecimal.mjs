@@ -9,6 +9,28 @@ import TestRegister from "../../lib/TestRegister.mjs";
 
 TestRegister.addTests([
     {
+        name: "To Decimal unsigned values",
+        input: "A\u00ff",
+        expectedOutput: "65,255",
+        recipeConfig: [
+            {
+                op: "To Decimal",
+                args: ["Comma", false]
+            },
+        ],
+    },
+    {
+        name: "To Decimal signed values",
+        input: "A\u00ff",
+        expectedOutput: "65,-1",
+        recipeConfig: [
+            {
+                op: "To Decimal",
+                args: ["Comma", true]
+            },
+        ],
+    },
+    {
         name: "From Decimal",
         input: "83 97 109 112 108 101 32 84 101 120 116",
         expectedOutput: "Sample Text",

@@ -1,4 +1,7 @@
 import assert from "assert";
+import {APPROVAL_CHANGE_TYPE, APPROVAL_RISK_FLAG} from
+    "../../../src/web/webmcp/ApprovalCoordinator.mjs";
+import {formatApprovalSummary} from "../../../src/web/waiters/ApprovalWaiter.mjs";
 import {formatAgentChangeSummary} from "../../../src/web/waiters/CollaborationWaiter.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
@@ -27,5 +30,29 @@ TestRegister.addApiTests([
             formatAgentChangeSummary(null),
             "Latest WebMCP change updated the Recipe."
         );
+    }),
+
+    it("WebMCPCollaborationUI: should format approval summaries without values", () => {
+        const summary = formatApprovalSummary({
+                operationNames: ["Generate HOTP"],
+                changeTypes: [APPROVAL_CHANGE_TYPE.INSERT],
+                sensitiveParameterNames: [],
+                riskFlags: [
+                    APPROVAL_RISK_FLAG.SECRET_INPUT,
+                    APPROVAL_RISK_FLAG.SENSITIVE_OUTPUT,
+                    APPROVAL_RISK_FLAG.INPUT_DERIVED_ARGUMENTS,
+                ],
+                value: "SECRET_CANARY",
+            }),
+            serialized = JSON.stringify(summary);
+
+        assert.deepStrictEqual(summary, {
+            operations: "Operations: Generate HOTP.",
+            changes: "Requested Recipe effects: add an Operation.",
+            parameters: "Parameter values remain hidden.",
+            risks: "Additional effects: process sensitive Input data, produce sensitive output and " +
+                "copy captured Input-derived data into later Operation arguments.",
+        });
+        assert.equal(serialized.includes("SECRET_CANARY"), false);
     }),
 ]);

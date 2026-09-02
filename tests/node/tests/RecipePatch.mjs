@@ -1,7 +1,6 @@
 import assert from "assert";
 import {
     RECIPE_PATCH_ERROR_CODE,
-    RECIPE_PATCH_MAX_COMMANDS,
     RecipePatchError,
     applyRecipePatch,
 } from "../../../src/web/recipe/RecipePatch.mjs";
@@ -140,7 +139,7 @@ TestRegister.addApiTests([
         }], createStepIdSource()), RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, 0);
     }),
 
-    it("RecipePatch: should reject invalid commands and bounded values", () => {
+    it("RecipePatch: should reject invalid commands and unsupported values", () => {
         const initial = snapshot([step("first", operation("From Hex", ["Auto"]))]);
 
         assertPatchError(() => applyRecipePatch(initial, [{
@@ -158,14 +157,93 @@ TestRegister.addApiTests([
             type: "insert",
             operation: "To Hex",
         }], createStepIdSource()), RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, 0);
-        assertPatchError(() => applyRecipePatch(initial, new Array(RECIPE_PATCH_MAX_COMMANDS + 1).fill({
-            type: "disable",
-            stepId: "first",
-        }), createStepIdSource()), RECIPE_PATCH_ERROR_CODE.INVALID_PATCH, null);
         assertPatchError(() => applyRecipePatch(initial, [{
             type: "__proto__",
             stepId: "first",
         }], createStepIdSource()), RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, 0);
+    }),
+
+    it("RecipePatch: should accept Recipe shapes without patch-specific count or string limits", () => {
+        const longValue = "x".repeat(16 * 1024 + 1),
+            arguments_ = new Array(57).fill(""),
+            initial = snapshot([step("colossus", operation("Colossus", arguments_))]),
+            commands = new Array(21).fill(null).map(() => ({
+                type: "disable",
+                stepId: "colossus",
+            }));
+        commands.push({
+            type: "setArgument",
+            stepId: "colossus",
+            argumentIndex: 56,
+            value: longValue,
+        });
+        commands.push({
+            type: "insert",
+            operation: "Colossus",
+            arguments: arguments_,
+        });
+
+        const result = applyRecipePatch(initial, commands, createStepIdSource());
+        assert.equal(result.actions.length, 23);
+        assert.equal(result.steps[0].operation.args[56], longValue);
+        assert.equal(result.steps[1].operation.args.length, 57);
+    }),
+
+    it("RecipePatch: should detach closed toggleString arguments", () => {
+        const existing = {option: "Hex", string: "01"},
+            replacement = {option: "UTF8", string: "A"},
+            inserted = {option: "Decimal", string: "65"},
+            initial = snapshot([
+                step("existing", operation("ADD", [existing])),
+                step("updated", operation("ADD", [{option: "Hex", string: "02"}])),
+            ]),
+            result = applyRecipePatch(initial, [{
+                type: "setArgument",
+                stepId: "updated",
+                argumentIndex: 0,
+                value: replacement,
+            }, {
+                type: "insert",
+                operation: "ADD",
+                arguments: [inserted],
+            }], createStepIdSource());
+
+        existing.string = "changed";
+        replacement.string = "changed";
+        inserted.string = "changed";
+        assert.deepStrictEqual(result.steps[0].operation.args[0], {option: "Hex", string: "01"});
+        assert.deepStrictEqual(result.steps[1].operation.args[0], {option: "UTF8", string: "A"});
+        assert.deepStrictEqual(result.steps[2].operation.args[0], {option: "Decimal", string: "65"});
+        assert.equal(Object.isFrozen(result.steps[0].operation.args[0]), true);
+        assert.equal(Object.isFrozen(result.steps[1].operation.args[0]), true);
+        assert.equal(Object.isFrozen(result.steps[2].operation.args[0]), true);
+    }),
+
+    it("RecipePatch: should reject open or accessor toggleString arguments", () => {
+        const initial = snapshot([step("add", operation("ADD", [{option: "Hex", string: ""}]))]),
+            accessor = {string: "SECRET"};
+        let getterCalled = false;
+        Object.defineProperty(accessor, "option", {
+            enumerable: true,
+            get() {
+                getterCalled = true;
+                return "Hex";
+            },
+        });
+
+        assertPatchError(() => applyRecipePatch(initial, [{
+            type: "setArgument",
+            stepId: "add",
+            argumentIndex: 0,
+            value: {option: "Hex", string: "SECRET", extra: true},
+        }], createStepIdSource()), RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, 0);
+        assertPatchError(() => applyRecipePatch(initial, [{
+            type: "setArgument",
+            stepId: "add",
+            argumentIndex: 0,
+            value: accessor,
+        }], createStepIdSource()), RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, 0);
+        assert.equal(getterCalled, false);
     }),
 
     it("RecipePatch: should reject active and deleted draft identity reuse", () => {

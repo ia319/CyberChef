@@ -63,6 +63,10 @@ TestRegister.addApiTests([
                 ],
                 matchesCrib: true,
                 useful: true,
+            }], [{
+                candidateId: "analysis-candidate-1",
+                rank: 1,
+                operationNames: ["From Base64", "To Hex", "ROT13"],
             }]),
             serialized = JSON.stringify(createSuccessResult(result));
 
@@ -84,6 +88,7 @@ TestRegister.addApiTests([
             "topLanguageId",
             "matchingOperationNames",
             "candidateOperationNames",
+            "candidates",
         ]);
         assert.deepStrictEqual(result, {
             analysisId: 7,
@@ -103,6 +108,11 @@ TestRegister.addApiTests([
             topLanguageId: "en",
             matchingOperationNames: ["From Hex", "From Base64", "URL Decode"],
             candidateOperationNames: ["From Base64", "To Hex", "ROT13"],
+            candidates: [{
+                candidateId: "analysis-candidate-1",
+                rank: 1,
+                operationNames: ["From Base64", "To Hex", "ROT13"],
+            }],
         });
         for (const canary of [
             "OUTPUT_PREVIEW_CANARY",
@@ -135,6 +145,7 @@ TestRegister.addApiTests([
         assert.equal(result.topLanguageId, UNKNOWN_ANALYSIS_ID);
         assert.deepStrictEqual(result.matchingOperationNames, []);
         assert.deepStrictEqual(result.candidateOperationNames, []);
+        assert.deepStrictEqual(result.candidates, []);
         assert.equal(serialized.includes(canary), false);
     }),
 

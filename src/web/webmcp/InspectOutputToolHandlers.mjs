@@ -2,6 +2,7 @@ import {
     AGENT_ANALYSIS_ERROR_CODE,
     AgentAnalysisError,
 } from "./AgentAnalysisError.mjs";
+import {createMagicAnalysisOptions} from "../analysis/AnalysisPolicy.mjs";
 import {serializeOutputAnalysis} from "./OutputAnalysisSerializer.mjs";
 import {ToolExecutionError} from "./ToolExecutor.mjs";
 import {TOOL_NAME} from "./ToolDefinitions.mjs";
@@ -47,10 +48,23 @@ function createInspectOutputToolHandlers(analysisService) {
     async function inspectOutput(input, invocation) {
         invocation.checkpoint();
 
+        let magicOptions;
+        try {
+            magicOptions = createMagicAnalysisOptions({
+                depth: input.depth,
+                intensiveMode: input.intensiveMode,
+                extensiveLanguageSupport: input.extensiveLanguageSupport,
+                crib: input.crib,
+            });
+        } catch {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.INVALID_REQUEST);
+        }
+
         let result;
         try {
             result = await analysisService.inspectCurrentOutput(
                 input.bakeId,
+                magicOptions,
                 invocation
             );
         } catch (err) {
@@ -62,7 +76,11 @@ function createInspectOutputToolHandlers(analysisService) {
 
         let data;
         try {
-            data = serializeOutputAnalysis(result.analysis, result.candidates);
+            data = serializeOutputAnalysis(
+                result.analysis,
+                result.candidates,
+                result.candidateReferences
+            );
         } catch {
             throw new ToolExecutionError(TOOL_ERROR_CODE.INTERNAL_ERROR);
         }

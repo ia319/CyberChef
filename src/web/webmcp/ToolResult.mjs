@@ -1,4 +1,5 @@
 import {isBakeErrorContext} from "./BakeResultContext.mjs";
+import {isApprovalErrorContext} from "./ApprovalResultContext.mjs";
 import { copyJsonValue } from "./JsonValue.mjs";
 
 const TOOL_RESULT_VERSION = "1";
@@ -58,7 +59,7 @@ const ERROR_DEFINITIONS = Object.freeze({
     [TOOL_ERROR_CODE.UNSUPPORTED_INGREDIENT]: defineError("This Operation argument type is not supported for Agent changes.", false, true),
     [TOOL_ERROR_CODE.UNREVIEWED_OPERATION]: defineError("This Operation has not been approved for Agent changes.", false, true),
     [TOOL_ERROR_CODE.RISK_BLOCKED]: defineError("The requested action is blocked by the Recipe safety policy.", false, true),
-    [TOOL_ERROR_CODE.USER_ACTION_REQUIRED]: defineError("The user must complete this action in CyberChef.", false, true),
+    [TOOL_ERROR_CODE.USER_ACTION_REQUIRED]: defineError("The user must approve this exact action in CyberChef.", true, true),
     [TOOL_ERROR_CODE.TAB_MISMATCH]: defineError("The active Input and Output tabs do not identify the same workspace target.", true, true),
     [TOOL_ERROR_CODE.BAKE_BUSY]: defineError("CyberChef is running a different Recipe target.", true, false),
     [TOOL_ERROR_CODE.BAKE_PAUSED]: defineError("The Recipe paused at a breakpoint.", false, true),
@@ -79,17 +80,17 @@ const ERROR_DEFINITIONS = Object.freeze({
  * Builds a fixed error result without accepting dynamic error text.
  *
  * @param {string} code - Error code from TOOL_ERROR_CODE.
- * @param {Object|undefined} [context] - Reviewed terminal Bake context.
+ * @param {Object|undefined} [context] - Reviewed Bake or approval context.
  * @returns {Object} A JSON-safe error envelope.
  */
 function buildErrorResult(code, context) {
-    let safeCode = Object.prototype.hasOwnProperty.call(ERROR_DEFINITIONS, code) ?
+    const safeCode = Object.prototype.hasOwnProperty.call(ERROR_DEFINITIONS, code) ?
         code : TOOL_ERROR_CODE.INTERNAL_ERROR;
 
-    if (typeof context !== "undefined" && !isBakeErrorContext(safeCode, context)) {
-        safeCode = TOOL_ERROR_CODE.INTERNAL_ERROR;
-        return buildErrorResult(safeCode);
-    }
+    const approvalContext = typeof context !== "undefined" &&
+        isApprovalErrorContext(safeCode, context);
+    if (typeof context !== "undefined" && !approvalContext &&
+        !isBakeErrorContext(safeCode, context)) return buildErrorResult(TOOL_ERROR_CODE.INTERNAL_ERROR);
 
     const definition = ERROR_DEFINITIONS[safeCode],
         result = {
@@ -103,8 +104,13 @@ function buildErrorResult(code, context) {
             },
         };
     if (typeof context !== "undefined") {
-        if (context.stepId !== null) result.error.stepId = context.stepId;
-        result.state = context.state;
+        if (approvalContext) {
+            result.error.approvalRequestId = context.approvalRequestId;
+            result.state = context.state;
+        } else {
+            if (context.stepId !== null) result.error.stepId = context.stepId;
+            result.state = context.state;
+        }
     }
     return result;
 }
@@ -181,7 +187,7 @@ function isSuccessResultWithinBudget(data, state) {
  * Creates an error result from the fixed error catalog.
  *
  * @param {string} code - Error code from TOOL_ERROR_CODE.
- * @param {Object|undefined} [context] - Optional reviewed terminal Bake context.
+ * @param {Object|undefined} [context] - Optional reviewed Bake or approval context.
  * @returns {Object} A JSON-safe error envelope.
  */
 function createErrorResult(code, context) {

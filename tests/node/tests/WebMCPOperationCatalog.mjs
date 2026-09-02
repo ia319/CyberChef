@@ -21,7 +21,13 @@ const createConfig = entries => Object.fromEntries(entries.map(([name, descripti
 TestRegister.addApiTests([
     it("WebMCPOperationCatalog: should expose every generated Operation by exact name", () => {
         assert.equal(OPERATION_CATALOG.size, OPERATION_CATALOG.getOperationNames().length);
-        assert.deepStrictEqual(OPERATION_CATALOG.getOperationNames(), Object.keys(OperationConfig));
+        assert.deepStrictEqual(
+            [...OPERATION_CATALOG.getOperationNames()].sort(),
+            Object.keys(OperationConfig)
+                .filter(name => name !== "Automated Validation Test Op")
+                .sort()
+        );
+        assert.equal(OPERATION_CATALOG.getOperation("Automated Validation Test Op"), null);
         assert.equal(OPERATION_CATALOG.getOperation("To Base64").coreOutputType, "string");
         assert.equal(OPERATION_CATALOG.getOperation("Unzip").coreOutputType, "List<File>");
         assert.equal(OPERATION_CATALOG.getOperation("Unzip").presentType, "html");

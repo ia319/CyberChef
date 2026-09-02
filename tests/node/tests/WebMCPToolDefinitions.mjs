@@ -44,10 +44,20 @@ const VALID_INPUTS = Object.freeze({
     [TOOL_NAME.GET_RECIPE_STATE]: {},
     [TOOL_NAME.APPLY_RECIPE_PATCH]: {
         expectedRevision: 2,
+        recipeApprovalRequestId: "approval-request-1",
         changes: [{type: "insert", operation: "To Base64", arguments: ["A-Za-z0-9+/="]}],
     },
-    [TOOL_NAME.BAKE_RECIPE]: {expectedRevision: 2},
-    [TOOL_NAME.INSPECT_OUTPUT]: {bakeId: 7},
+    [TOOL_NAME.BAKE_RECIPE]: {
+        expectedRevision: 2,
+        bakeApprovalRequestId: "approval-request-1",
+    },
+    [TOOL_NAME.INSPECT_OUTPUT]: {
+        bakeId: 7,
+        depth: 2,
+        intensiveMode: true,
+        extensiveLanguageSupport: true,
+        crib: "known text",
+    },
 });
 
 const assertDeeplyFrozen = value => {
@@ -146,6 +156,57 @@ TestRegister.addApiTests([
 
         assert.equal(validateToolInput(insert, schema).valid, false);
         assert.equal(validateToolInput(move, schema).valid, false);
+    }),
+
+    it("WebMCPToolDefinitions: should accept one exclusive Magic candidate reference", () => {
+        const schema = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH].inputSchema,
+            candidateInput = {
+                expectedRevision: 2,
+                analysisCandidateId: "analysis-candidate-1",
+            };
+
+        assert.equal(validateToolInput(candidateInput, schema).valid, true);
+        assert.equal(validateToolInput({
+            ...candidateInput,
+            changes: [{type: "insert", operation: "From Hex"}],
+        }, schema).valid, false);
+        assert.equal(validateToolInput({
+            expectedRevision: 2,
+            analysisCandidateId: "short",
+        }, schema).valid, false);
+    }),
+
+    it("WebMCPToolDefinitions: should accept native Recipe argument shapes", () => {
+        const schema = TOOL_CONTRACTS[TOOL_NAME.APPLY_RECIPE_PATCH].inputSchema,
+            longValue = "x".repeat(16 * 1024 + 1),
+            changes = new Array(21).fill(null).map(() => ({
+                type: "disable",
+                stepId: "step-1",
+            }));
+        changes.push({
+            type: "insert",
+            operation: "Colossus",
+            arguments: new Array(57).fill("").map((value, index) =>
+                index === 56 ? longValue : value
+            ),
+        });
+        changes.push({
+            type: "setArgument",
+            stepId: "step-1",
+            argumentIndex: 56,
+            value: {option: "Hex", string: "01"},
+        });
+
+        assert.equal(validateToolInput({expectedRevision: 2, changes}, schema).valid, true);
+        assert.equal(validateToolInput({
+            expectedRevision: 2,
+            changes: [{
+                type: "setArgument",
+                stepId: "step-1",
+                argumentIndex: 0,
+                value: {option: "Hex", string: "01", extra: true},
+            }],
+        }, schema).valid, false);
     }),
 
     it("WebMCPToolDefinitions: should match annotations to observable behavior", () => {

@@ -28,6 +28,8 @@ import {
  */
 class RecipeWaiter {
 
+    #preparedAgentPatches;
+
     /**
      * RecipeWaiter constructor.
      *
@@ -53,6 +55,7 @@ class RecipeWaiter {
         this.modelSyncDepth = 0;
         this.domProjection = new RecipeDOMProjection(this.app, this.manager);
         this.transaction = new RecipeTransaction(this.model, this.domProjection);
+        this.#preparedAgentPatches = new WeakMap();
     }
 
 
@@ -531,6 +534,17 @@ class RecipeWaiter {
     captureAgentAutoBakeContext() {
         if (!this.agentAutoBakeEnabled || !this.app.autoBake_) return null;
 
+        return this.captureAgentPatchContext();
+    }
+
+
+    /**
+     * Captures content-free active workspace identities for patch policy and approval binding.
+     *
+     * @returns {Object|null} Synchronized Input, Output, and view state or null.
+     */
+    captureAgentPatchContext() {
+
         const viewState = this.manager.tabs.getViewState();
         if (!viewState.tabsSynchronized) return null;
 
@@ -544,6 +558,116 @@ class RecipeWaiter {
 
 
     /**
+     * Captures one immutable active workspace target for a Recipe revision.
+     *
+     * @param {Object} context - Synchronized active workspace identities.
+     * @param {number} recipeRevision - Recipe revision bound to the target.
+     * @returns {Object} Active content-free Run target.
+     */
+    captureAgentPatchTarget(context, recipeRevision) {
+        return this.manager.runTargets.requireActiveTarget(
+            this.manager.runTargets.capture({
+                source: RUN_TARGET_SOURCE.AGENT,
+                recipeRevisionAtStart: recipeRevision,
+                inputStates: [context.inputState],
+                outputStates: [context.outputState],
+                ...context.viewState,
+                executionOptions: this.app.options,
+                progress: 0,
+                step: false,
+            })
+        );
+    }
+
+
+    /**
+     * Validates one Agent patch without changing the visible Recipe.
+     *
+     * @param {Object} input - Detached Agent patch request.
+     * @returns {Object} One-use prepared patch and content-free authorization state.
+     */
+    prepareAgentPatch(input) {
+        this.#requireBakeIdle();
+
+        const patchContext = this.captureAgentPatchContext(),
+            autoBakeContext = this.agentAutoBakeEnabled && this.app.autoBake_ ?
+                patchContext : null;
+        let autoBakeTarget = null,
+            approvalTarget = null;
+        const transactionPolicy = {
+                prepareChanges: changes => this.agentPatchPolicy.prepareChanges(changes),
+                authorizePatch: patch => {
+                    const postflight = this.agentPatchPolicy.authorizePatch(
+                        patch,
+                        patchContext?.inputState.inputByteLength ?? null
+                    );
+                    if (postflight.approvalRequired === true && patchContext) {
+                        approvalTarget = this.captureAgentPatchTarget(
+                            patchContext,
+                            input.expectedRevision
+                        );
+                    }
+                    if (!autoBakeContext || postflight.agentBakeAllowed !== true) return postflight;
+
+                    autoBakeTarget = this.captureAgentPatchTarget(
+                        autoBakeContext,
+                        input.expectedRevision + 1
+                    );
+                    return postflight;
+                },
+            },
+            transactionPatch = this.transaction.prepareAgentPatch(input, transactionPolicy),
+            preparedPatch = Object.freeze({
+                authorization: transactionPatch.authorization,
+                workspaceBinding: approvalTarget,
+            });
+        this.#preparedAgentPatches.set(preparedPatch, {
+            transactionPatch,
+            autoBakeTarget,
+            patchContext,
+        });
+        return preparedPatch;
+    }
+
+
+    /**
+     * Commits a prepared standard-policy patch and preserves authorized Auto Bake behavior.
+     *
+     * @param {Object} preparedPatch - One-use prepared patch.
+     * @param {Function|null} [applicationWorkFactory=null] - Session-bound Run lifetime factory.
+     * @returns {Object} Bounded transaction result.
+     */
+    commitAgentPatch(preparedPatch, applicationWorkFactory=null) {
+        this.#requireBakeIdle();
+        const prepared = this.#takePreparedAgentPatch(preparedPatch),
+            result = this.transaction.commitAgentPatch(prepared.transactionPatch);
+        this.#publishAgentPatchResult(result, prepared.autoBakeTarget, applicationWorkFactory);
+        return result;
+    }
+
+
+    /**
+     * Commits an approved patch without Auto Bake and optionally captures its exact Bake target.
+     *
+     * @param {Object} preparedPatch - One-use prepared patch.
+     * @param {boolean} includeBakeTarget - Whether the user approved one exact Bake.
+     * @returns {Object} Transaction result and optional post-change Bake target.
+     */
+    commitApprovedAgentPatch(preparedPatch, includeBakeTarget) {
+        if (typeof includeBakeTarget !== "boolean") {
+            throw new TypeError("Approved Bake target choice is invalid");
+        }
+        this.#requireBakeIdle();
+        const prepared = this.#takePreparedAgentPatch(preparedPatch),
+            result = this.transaction.commitAgentPatch(prepared.transactionPatch),
+            bakeTarget = includeBakeTarget && prepared.patchContext ?
+                this.captureAgentPatchTarget(prepared.patchContext, result.recipeRevision) : null;
+        this.#publishAgentPatchResult(result, null, null);
+        return Object.freeze({result, bakeTarget});
+    }
+
+
+    /**
      * Applies an authorized Agent patch to the visible Recipe.
      *
      * @param {Object} input - Detached Agent patch request.
@@ -551,36 +675,46 @@ class RecipeWaiter {
      * @returns {Object} Bounded transaction result.
      */
     applyAgentPatch(input, applicationWorkFactory=null) {
+        return this.commitAgentPatch(this.prepareAgentPatch(input), applicationWorkFactory);
+    }
+
+
+    /**
+     * Consumes one waiter-owned prepared patch.
+     *
+     * @param {Object} preparedPatch - One-use prepared patch.
+     * @returns {Object} Internal transaction and target state.
+     */
+    #takePreparedAgentPatch(preparedPatch) {
+        const prepared = this.#preparedAgentPatches.get(preparedPatch);
+        if (!prepared) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH);
+        }
+        this.#preparedAgentPatches.delete(preparedPatch);
+        return prepared;
+    }
+
+
+    /**
+     * Preserves Recipe state while an active Bake owns its captured target.
+     *
+     * @throws {RecipeTransactionError} When a Bake is active.
+     */
+    #requireBakeIdle() {
         if (this.app.baking) {
             throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
         }
+    }
 
-        const autoBakeContext = this.captureAgentAutoBakeContext();
-        let autoBakeTarget = null;
-        const transactionPolicy = {
-                prepareChanges: changes => this.agentPatchPolicy.prepareChanges(changes),
-                authorizePatch: patch => {
-                    const postflight = this.agentPatchPolicy.authorizePatch(
-                        patch,
-                        autoBakeContext?.inputState.inputByteLength ?? null
-                    );
-                    if (!autoBakeContext || postflight.agentBakeAllowed !== true) return;
 
-                    autoBakeTarget = this.manager.runTargets.requireActiveTarget(
-                        this.manager.runTargets.capture({
-                            source: RUN_TARGET_SOURCE.AGENT,
-                            recipeRevisionAtStart: input.expectedRevision + 1,
-                            inputStates: [autoBakeContext.inputState],
-                            outputStates: [autoBakeContext.outputState],
-                            ...autoBakeContext.viewState,
-                            executionOptions: this.app.options,
-                            progress: 0,
-                            step: false,
-                        })
-                    );
-                },
-            },
-            result = this.transaction.applyAgentPatch(input, transactionPolicy);
+    /**
+     * Publishes the visible state owned by a committed Agent Recipe transaction.
+     *
+     * @param {Object} result - Committed or unchanged transaction result.
+     * @param {Object|null} autoBakeTarget - Authorized standard-policy Auto Bake target.
+     * @param {Function|null} applicationWorkFactory - Session-bound Run lifetime factory.
+     */
+    #publishAgentPatchResult(result, autoBakeTarget, applicationWorkFactory) {
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
             this.app.agentRecipeTransactionCommitted(
                 result.change,
@@ -589,7 +723,6 @@ class RecipeWaiter {
             );
             this.adjustWidth();
         }
-        return result;
     }
 
 
@@ -609,9 +742,7 @@ class RecipeWaiter {
      * @returns {Object} Bounded transaction result.
      */
     revertAgentPatch() {
-        if (this.app.baking) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
-        }
+        this.#requireBakeIdle();
 
         const result = this.transaction.revertAgentPatch();
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {

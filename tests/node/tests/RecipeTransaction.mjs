@@ -85,6 +85,75 @@ function assertTransactionError(callback, code, commandIndex=null) {
 
 
 TestRegister.addApiTests([
+    it("RecipeTransaction: should prepare without changing visible state", () => {
+        const argumentCanary = "SECRET_PREPARED_ARGUMENT_CANARY",
+            authorization = Object.freeze({approvalRequired: true}),
+            {model, stepIds} = createModel([operation("To Base64", ["A-Za-z0-9+/="])]),
+            before = model.getSnapshot(),
+            adapter = createProjectionAdapter(before.steps),
+            transaction = new RecipeTransaction(model, adapter),
+            prepared = transaction.prepareAgentPatch({
+                expectedRevision: 1,
+                changes: [{
+                    type: "setArgument",
+                    stepId: stepIds[0],
+                    argumentIndex: 0,
+                    value: argumentCanary,
+                }],
+            }, {
+                prepareChanges: changes => changes,
+                authorizePatch: () => authorization,
+            });
+
+        assert.deepStrictEqual(prepared, {
+            expectedRevision: 1,
+            authorization,
+        });
+        assert.equal(JSON.stringify(prepared).includes(argumentCanary), false);
+        const afterPreparation = model.getSnapshot();
+        assert.equal(afterPreparation.recipeRevision, before.recipeRevision);
+        assert.strictEqual(afterPreparation.steps, before.steps);
+        assert.deepStrictEqual(adapter.getState(), {
+            visibleSteps: before.steps,
+            prepareCount: 0,
+            publishCount: 0,
+            rollbackCount: 0,
+        });
+
+        const result = transaction.commitAgentPatch(prepared);
+        assert.equal(result.status, RECIPE_TRANSACTION_STATUS.COMMITTED);
+        assert.equal(model.getSnapshot().recipeRevision, 2);
+        assert.equal(adapter.getState().publishCount, 1);
+        assertTransactionError(
+            () => transaction.commitAgentPatch(prepared),
+            RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH
+        );
+    }),
+
+    it("RecipeTransaction: should reject a prepared patch after another Recipe change", () => {
+        const {model, stepIds} = createModel([operation("From Hex", ["Auto"])]),
+            adapter = createProjectionAdapter(model.getSnapshot().steps),
+            transaction = new RecipeTransaction(model, adapter),
+            prepared = transaction.prepareAgentPatch({
+                expectedRevision: 1,
+                changes: [{type: "disable", stepId: stepIds[0]}],
+            }, ALLOW_AGENT_PATCH_POLICY);
+
+        transaction.commitUserProjection([
+            projectedStep(stepIds[0], operation("From Hex", ["Auto"], {breakpoint: true})),
+        ], RECIPE_TRANSACTION_SOURCE.BREAKPOINT);
+        assertTransactionError(
+            () => transaction.commitAgentPatch(prepared),
+            RECIPE_TRANSACTION_ERROR_CODE.STALE_RECIPE
+        );
+        assert.equal(adapter.getState().prepareCount, 0);
+        assert.equal(adapter.getState().publishCount, 0);
+        assertTransactionError(
+            () => transaction.commitAgentPatch(prepared),
+            RECIPE_TRANSACTION_ERROR_CODE.INVALID_PATCH
+        );
+    }),
+
     it("RecipeTransaction: should commit one Agent patch with trusted attribution", () => {
         const {model, stepIds} = createModel([
                 operation("To Base64", ["A-Za-z0-9+/="]),

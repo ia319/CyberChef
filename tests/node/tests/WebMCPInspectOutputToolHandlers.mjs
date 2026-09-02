@@ -71,6 +71,11 @@ function createAnalysisResult(overrides={}) {
             matchingOps: [{op: "From Hex", args: [DATA_CANARIES[2]]}],
             error: DATA_CANARIES[4],
         }],
+        candidateReferences: [{
+            candidateId: "analysis-candidate-1",
+            rank: 1,
+            operationNames: ["From Base64"],
+        }],
         rawInput: DATA_CANARIES[0],
         rawOutput: DATA_CANARIES[1],
         ...overrides,
@@ -108,6 +113,14 @@ function createIntegratedFixture(deferCompletion=false) {
     let provenance = createAnalysisResult().analysis.target,
         notifyStarted;
     const analyses = new AnalysisCoordinator(),
+        analysisVariantIds = new Map(),
+        getAnalysisVariantId = magicOptions => {
+            const key = JSON.stringify(magicOptions);
+            if (!analysisVariantIds.has(key)) {
+                analysisVariantIds.set(key, analysisVariantIds.size + 1);
+            }
+            return analysisVariantIds.get(key);
+        },
         evidence = {startCount: 0, analysisId: null},
         started = new Promise(resolve => {
             notifyStarted = resolve;
@@ -123,8 +136,16 @@ function createIntegratedFixture(deferCompletion=false) {
             },
             background: {
                 invalidateAnalysis: () => {},
-                magic: (sample, target, owner, signal) => {
-                    const request = analyses.ensure(target, {owner, signal});
+                getMagicDecision: (target, magicOptions) => analyses.getDecision(
+                    target,
+                    getAnalysisVariantId(magicOptions)
+                ),
+                magic: (sample, target, owner, signal, magicOptions) => {
+                    const request = analyses.ensure(target, {
+                        owner,
+                        signal,
+                        analysisVariantId: getAnalysisVariantId(magicOptions),
+                    });
                     if (request.decision === ANALYSIS_DECISION.STARTED) {
                         evidence.startCount++;
                         evidence.analysisId = request.analysis.analysisId;
@@ -166,17 +187,32 @@ function createIntegratedFixture(deferCompletion=false) {
 TestRegister.addApiTests([
     it("WebMCPInspectOutputToolHandlers: should return only approved derived fields", async () => {
         let receivedBakeId,
+            receivedMagicOptions,
             receivedInvocation;
         const result = await executeInspection({
-                inspectCurrentOutput: async (bakeId, invocation) => {
+                inspectCurrentOutput: async (bakeId, magicOptions, invocation) => {
                     receivedBakeId = bakeId;
+                    receivedMagicOptions = magicOptions;
                     receivedInvocation = invocation;
                     return createAnalysisResult();
                 },
+            }, {
+                bakeId: 11,
+                depth: 2,
+                intensiveMode: true,
+                extensiveLanguageSupport: true,
+                crib: DATA_CANARIES[3],
             }),
             serialized = JSON.stringify(result);
 
         assert.equal(receivedBakeId, 11);
+        assert.deepStrictEqual(receivedMagicOptions, {
+            depth: 2,
+            intensiveMode: true,
+            extensiveLanguageSupport: true,
+            crib: DATA_CANARIES[3],
+        });
+        assert.equal(Object.isFrozen(receivedMagicOptions), true);
         assert(receivedInvocation.signal instanceof AbortSignal);
         assert.deepStrictEqual(result.state, {sessionEpoch: 5});
         assert.deepStrictEqual(result.data, {
@@ -197,6 +233,11 @@ TestRegister.addApiTests([
             topLanguageId: "en",
             matchingOperationNames: ["From Hex"],
             candidateOperationNames: ["From Base64"],
+            candidates: [{
+                candidateId: "analysis-candidate-1",
+                rank: 1,
+                operationNames: ["From Base64"],
+            }],
         });
         for (const canary of DATA_CANARIES) assert.equal(serialized.includes(canary), false);
         for (const exactScore of ["0.987654321", "4.123456789"]) {
@@ -239,6 +280,13 @@ TestRegister.addApiTests([
         for (const input of [
             {bakeId: 0},
             {bakeId: 11, reason: DATA_CANARIES[5]},
+            {bakeId: 11, depth: -1},
+            {bakeId: 11, depth: 4},
+            {bakeId: 11, depth: 1.5},
+            {bakeId: 11, intensiveMode: "true"},
+            {bakeId: 11, extensiveLanguageSupport: 1},
+            {bakeId: 11, crib: "x".repeat(129)},
+            {bakeId: 11, crib: "["},
         ]) {
             const result = await executeInspection(service, input);
             assert.equal(result.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);

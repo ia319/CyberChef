@@ -1,8 +1,5 @@
 import assert from "assert";
 import {
-    GOLDEN_RECIPE_RESOURCE_LIMITS,
-} from "../../../src/web/webmcp/OperationProfiles.mjs";
-import {
     MUTATION_ACTION,
     MUTATION_DECISION_CODE,
     evaluateOperationMutation,
@@ -32,219 +29,125 @@ const issueCodes = result => new Set(result.issues.map(issue => issue.code));
 
 
 TestRegister.addApiTests([
-    it("WebMCPOperationPreflight: should separate discovery, modification, and Bake permissions", () => {
+    it("WebMCPOperationPreflight: should map each access class to its permissions", () => {
         assert.deepStrictEqual(getOperationPermissions("To Base64"), {
             discoverable: true,
-            reviewStatus: "safe",
+            operationAccess: "direct",
             supportedMutationActions: ALL_MUTATION_ACTIONS,
             agentBakeAllowed: true,
+            mutationPolicy: "allowed",
+            agentBakePolicy: "allowed",
         });
         assert.deepStrictEqual(getOperationPermissions("HTTP request"), {
             discoverable: true,
-            reviewStatus: "denied",
+            operationAccess: "approval",
+            supportedMutationActions: ALL_MUTATION_ACTIONS,
+            agentBakeAllowed: false,
+            mutationPolicy: "userActionRequired",
+            agentBakePolicy: "userActionRequired",
+        });
+        assert.deepStrictEqual(getOperationPermissions("Magic"), {
+            discoverable: true,
+            operationAccess: "blocked",
             supportedMutationActions: REDUCTION_MUTATION_ACTIONS,
             agentBakeAllowed: false,
+            mutationPolicy: "blocked",
+            agentBakePolicy: "blocked",
         });
-        assert.deepStrictEqual(getOperationPermissions("SECRET_OPERATION_CANARY"), {
+        assert.deepStrictEqual(getOperationPermissions("Automated Validation Test Op"), {
             discoverable: false,
-            reviewStatus: null,
+            operationAccess: "excluded",
             supportedMutationActions: [],
             agentBakeAllowed: false,
+            mutationPolicy: "blocked",
+            agentBakePolicy: "blocked",
         });
+        assert.equal(getOperationPermissions("SECRET_OPERATION_CANARY").operationAccess, "unreviewed");
     }),
 
-    it("WebMCPOperationPreflight: should approve a complete profiled Recipe after resource checks", () => {
-        const recipe = [
-                operationStep("From Base64", ["A-Za-z0-9+/=", true, false]),
-                operationStep("To Hex", ["Space", 0]),
-            ],
-            unchecked = preflightOperationRecipe(recipe),
-            checked = preflightOperationRecipe(recipe, 1024);
+    it("WebMCPOperationPreflight: should use core arguments without WebMCP resource gates", () => {
+        const direct = preflightOperationRecipe([
+                operationStep("From Base64", ["CUSTOM_ALPHABET", true, false]),
+                operationStep("To Hex", ["Space", 4096]),
+                operationStep("Unzip"),
+            ]),
+            invalid = preflightOperationRecipe([
+                operationStep("To Hex", ["SECRET_DELIMITER", 0]),
+            ]);
 
-        assert.equal(unchecked.recipeValid, true);
-        assert.equal(unchecked.standardModificationAllowed, true);
-        assert.equal(unchecked.resourceChecked, false);
-        assert.equal(unchecked.agentBakeAllowed, false);
-        assert.equal(checked.recipeValid, true);
-        assert.equal(checked.standardModificationAllowed, true);
-        assert.equal(checked.resourceChecked, true);
-        assert.equal(checked.agentBakeAllowed, true);
-        assert.deepStrictEqual(checked.issues, []);
-        assert.deepStrictEqual(checked.resource, {
-            activeInputBytes: 1024,
-            estimatedFinalBytes: 5120,
-            estimatedWorkBytes: 6144,
-        });
+        assert.equal(direct.recipeValid, true);
+        assert.equal(direct.standardModificationAllowed, true);
+        assert.equal(direct.agentBakeAllowed, true);
+        assert.deepStrictEqual(direct.issues, []);
+        assert.equal(invalid.recipeValid, false);
+        assert(issueCodes(invalid).has(PREFLIGHT_ISSUE_CODE.INVALID_ARGUMENTS));
+        assert.equal(JSON.stringify(invalid).includes("SECRET_DELIMITER"), false);
     }),
 
-    it("WebMCPOperationPreflight: should reject arguments outside the reviewed profile without echoing values", () => {
-        const secret = "SECRET_ARGUMENT_CANARY",
-            customAlphabet = preflightOperationRecipe([
-                operationStep("From Base64", [secret, true, false]),
-            ], 128),
-            variableWidthHex = preflightOperationRecipe([
-                operationStep("To Hex", ["Space", 4]),
-            ], 128);
-
-        assert.equal(customAlphabet.recipeValid, false);
-        assert.equal(customAlphabet.standardModificationAllowed, false);
-        assert.equal(customAlphabet.agentBakeAllowed, false);
-        assert(issueCodes(customAlphabet).has(PREFLIGHT_ISSUE_CODE.INVALID_ARGUMENTS));
-        assert.equal(JSON.stringify(customAlphabet).includes(secret), false);
-        assert.equal(variableWidthHex.recipeValid, false);
-        assert(issueCodes(variableWidthHex).has(PREFLIGHT_ISSUE_CODE.INVALID_ARGUMENTS));
-    }),
-
-    it("WebMCPOperationPreflight: should ignore disabled risky steps for the enabled execution chain", () => {
-        const disabledRisk = preflightOperationRecipe([
-                operationStep("HTTP request", undefined, true),
-                operationStep("To Base64"),
-            ], 128),
-            enabledRisk = preflightOperationRecipe([
+    it("WebMCPOperationPreflight: should authorize complete Recipes by access class", () => {
+        const approval = preflightOperationRecipe([
                 operationStep("HTTP request"),
+                operationStep("Render PDF"),
+                operationStep("Register", ["SECRET_CAPTURE_CANARY", true, false, false]),
+            ]),
+            disabledBlocked = preflightOperationRecipe([
+                operationStep("Magic", undefined, true),
                 operationStep("To Base64"),
-            ], 128);
+            ]),
+            blocked = preflightOperationRecipe([operationStep("Magic")]),
+            excluded = preflightOperationRecipe([operationStep("Automated Validation Test Op")]);
 
-        assert.equal(disabledRisk.standardModificationAllowed, true);
-        assert.equal(disabledRisk.agentBakeAllowed, true);
-        assert.deepStrictEqual(disabledRisk.issues, []);
-        assert.equal(enabledRisk.standardModificationAllowed, false);
-        assert.equal(enabledRisk.agentBakeAllowed, false);
-        assert(issueCodes(enabledRisk).has(PREFLIGHT_ISSUE_CODE.DENIED_OPERATION));
-        assert(issueCodes(enabledRisk).has(PREFLIGHT_ISSUE_CODE.NETWORK));
+        assert.equal(approval.approvalModificationAllowed, true);
+        assert.equal(approval.approvalBakeAllowed, true);
+        assert.deepStrictEqual(approval.approvalSummary.operationNames, [
+            "HTTP request",
+            "Render PDF",
+            "Register",
+        ]);
+        assert.deepStrictEqual(approval.approvalSummary.riskFlags, [
+            "networkAccess",
+            "richContent",
+            "inputDerivedArguments",
+        ]);
+        assert.equal(JSON.stringify(approval).includes("SECRET_CAPTURE_CANARY"), false);
+        assert.equal(disabledBlocked.agentBakeAllowed, true);
+        assert.deepStrictEqual(disabledBlocked.issues, []);
+        assert(issueCodes(blocked).has(PREFLIGHT_ISSUE_CODE.BLOCKED_OPERATION));
+        assert(issueCodes(excluded).has(PREFLIGHT_ISSUE_CODE.EXCLUDED_OPERATION));
     }),
 
-    it("WebMCPOperationPreflight: should report representative capability risks for the complete Recipe", () => {
-        const cases = [
-            ["HTTP request", ["DENIED_OPERATION", "NETWORK"]],
-            ["Render Markdown", ["DENIED_OPERATION", "REMOTE_RESOURCE", "HTML_PRESENTATION"]],
-            ["Magic", ["DENIED_OPERATION", "FLOW_CONTROL", "SCRIPT_EXECUTION"]],
-            ["Unzip", ["UNREVIEWED_OPERATION", "DECOMPRESSION", "FAN_OUT", "FILE_ARTIFACT"]],
-            ["Register", ["UNREVIEWED_OPERATION", "DATA_TO_ARGUMENT", "FLOW_CONTROL"]],
-            ["Power Set", ["UNREVIEWED_OPERATION", "FAN_OUT", "HIGH_COST"]],
-        ];
-
-        for (const [operationName, expectedCodes] of cases) {
-            const codes = issueCodes(preflightOperationRecipe([operationStep(operationName)], 128));
-            for (const code of expectedCodes) assert(codes.has(code), `${operationName}: ${code}`);
-        }
-    }),
-
-    it("WebMCPOperationPreflight: should reject a data-to-argument chain before an external sink", () => {
-        const result = preflightOperationRecipe([
-            operationStep("Register"),
-            operationStep("HTTP request"),
-        ], 128);
-
-        assert(issueCodes(result).has(PREFLIGHT_ISSUE_CODE.DATA_TO_ARGUMENT));
-        assert(issueCodes(result).has(PREFLIGHT_ISSUE_CODE.NETWORK));
-        assert(issueCodes(result).has(PREFLIGHT_ISSUE_CODE.DATA_TO_SINK));
-        assert.equal(result.agentBakeAllowed, false);
-    }),
-
-    it("WebMCPOperationPreflight: should enforce active Input, materialization, work, and step limits", () => {
-        const oversizedInput = preflightOperationRecipe([
-                operationStep("To Base64"),
-            ], GOLDEN_RECIPE_RESOURCE_LIMITS.maxActiveInputBytes + 1),
-            amplified = preflightOperationRecipe([
-                operationStep("To Hex"),
-                operationStep("To Hex"),
-            ], GOLDEN_RECIPE_RESOURCE_LIMITS.maxActiveInputBytes),
-            highWork = preflightOperationRecipe(
-                Array.from({length: 65}, () => operationStep("ROT13")),
-                GOLDEN_RECIPE_RESOURCE_LIMITS.maxActiveInputBytes
-            ),
-            tooManySteps = preflightOperationRecipe(
-                Array.from({length: GOLDEN_RECIPE_RESOURCE_LIMITS.maxSteps + 1}, () => operationStep("ROT13"))
+    it("WebMCPOperationPreflight: should apply complete-Recipe policy with bounded results", () => {
+        const direct = preflightOperationRecipe([operationStep("To Base64")]),
+            approval = preflightOperationRecipe([
+                operationStep("Generate HOTP", ["Account", 6, 0]),
+            ]),
+            blocked = preflightOperationRecipe([operationStep("Magic")]),
+            unknown = preflightOperationRecipe([operationStep("SECRET_OPERATION_CANARY")]),
+            repeated = preflightOperationRecipe(
+                Array.from({length: 100}, () => operationStep("Magic"))
             );
 
-        assert.equal(oversizedInput.standardModificationAllowed, true);
-        assert.equal(oversizedInput.agentBakeAllowed, false);
-        assert(issueCodes(oversizedInput).has(PREFLIGHT_ISSUE_CODE.ACTIVE_INPUT_LIMIT));
-        assert.equal(amplified.agentBakeAllowed, false);
-        assert(issueCodes(amplified).has(PREFLIGHT_ISSUE_CODE.STEP_OUTPUT_LIMIT));
-        assert(Number.isSafeInteger(amplified.resource.estimatedFinalBytes));
-        assert.equal(highWork.agentBakeAllowed, false);
-        assert(issueCodes(highWork).has(PREFLIGHT_ISSUE_CODE.ESTIMATED_WORK_LIMIT));
-        assert.equal(tooManySteps.standardModificationAllowed, false);
-        assert(issueCodes(tooManySteps).has(PREFLIGHT_ISSUE_CODE.RECIPE_STEP_LIMIT));
-    }),
-
-    it("WebMCPOperationPreflight: should keep unknown names and argument data out of results", () => {
-        const operationCanary = "SECRET_OPERATION_CANARY",
-            argumentCanary = "SECRET_ARGUMENT_CANARY",
-            result = preflightOperationRecipe([
-                operationStep(operationCanary, [argumentCanary]),
-            ], 128),
-            serialized = JSON.stringify(result);
-
-        assert.equal(result.recipeValid, false);
-        assert(issueCodes(result).has(PREFLIGHT_ISSUE_CODE.UNKNOWN_OPERATION));
-        assert.equal(serialized.includes(operationCanary), false);
-        assert.equal(serialized.includes(argumentCanary), false);
-        assert.equal(serialized.includes("arguments"), false);
-        assert.equal(Object.isFrozen(result), true);
-        assert.equal(Object.isFrozen(result.steps), true);
-        assert.equal(Object.isFrozen(result.issues), true);
-    }),
-
-    it("WebMCPOperationPreflight: should apply action policy to the complete post-change Recipe", () => {
-        const safePostflight = preflightOperationRecipe([operationStep("To Base64")]),
-            blockedPostflight = preflightOperationRecipe([operationStep("Register")]),
-            invalidPostflight = preflightOperationRecipe([operationStep("SECRET_OPERATION_CANARY")]);
-
         assert.deepStrictEqual(
-            evaluateOperationMutation(MUTATION_ACTION.INSERT, "To Base64", safePostflight),
+            evaluateOperationMutation(MUTATION_ACTION.INSERT, "To Base64", direct),
             {allowed: true, code: MUTATION_DECISION_CODE.ALLOWED}
         );
         assert.deepStrictEqual(
-            evaluateOperationMutation(MUTATION_ACTION.MOVE, "To Base64", blockedPostflight),
-            {allowed: false, code: MUTATION_DECISION_CODE.RECIPE_BLOCKED}
+            evaluateOperationMutation(MUTATION_ACTION.INSERT, "Generate HOTP", approval),
+            {allowed: true, code: MUTATION_DECISION_CODE.ALLOWED, approvalRequired: true}
         );
         assert.deepStrictEqual(
-            evaluateOperationMutation(MUTATION_ACTION.INSERT, "HTTP request", blockedPostflight),
+            evaluateOperationMutation(MUTATION_ACTION.INSERT, "Magic", blocked),
             {allowed: false, code: MUTATION_DECISION_CODE.ACTION_BLOCKED}
         );
-        for (const action of REDUCTION_MUTATION_ACTIONS) {
-            assert.deepStrictEqual(
-                evaluateOperationMutation(action, "Register", blockedPostflight),
-                {allowed: true, code: MUTATION_DECISION_CODE.ALLOWED}
-            );
-        }
         assert.deepStrictEqual(
-            evaluateOperationMutation(MUTATION_ACTION.INSERT, "SECRET_OPERATION_CANARY", safePostflight),
-            {allowed: false, code: MUTATION_DECISION_CODE.UNKNOWN_OPERATION}
+            evaluateOperationMutation(MUTATION_ACTION.REMOVE, "Magic", blocked),
+            {allowed: true, code: MUTATION_DECISION_CODE.ALLOWED}
         );
-        assert.deepStrictEqual(
-            evaluateOperationMutation(MUTATION_ACTION.INSERT, "To Base64", invalidPostflight),
-            {allowed: false, code: MUTATION_DECISION_CODE.INVALID_RECIPE}
-        );
-        assert.deepStrictEqual(
-            evaluateOperationMutation("replace", "To Base64", safePostflight),
-            {allowed: false, code: MUTATION_DECISION_CODE.ACTION_BLOCKED}
-        );
-    }),
-
-    it("WebMCPOperationPreflight: should bound reported issues", () => {
-        const result = preflightOperationRecipe(
-            Array.from({length: 100}, () => operationStep("HTTP request")),
-            128
-        );
-
-        assert.equal(result.issues.length, PREFLIGHT_MAX_REPORTED_ISSUES);
-        assert.equal(result.issuesTruncated, true);
-        assert.doesNotThrow(() => JSON.stringify(result));
-    }),
-
-    it("WebMCPOperationPreflight: should reject malformed Recipe and resource inputs", () => {
-        const malformedRecipe = preflightOperationRecipe(null),
-            malformedStep = preflightOperationRecipe([null]);
-
-        assert.equal(malformedRecipe.recipeValid, false);
-        assert(issueCodes(malformedRecipe).has(PREFLIGHT_ISSUE_CODE.INVALID_RECIPE));
-        assert.equal(malformedStep.recipeValid, false);
-        assert(issueCodes(malformedStep).has(PREFLIGHT_ISSUE_CODE.INVALID_RECIPE));
-        assert.throws(() => preflightOperationRecipe([], -1), RangeError);
-        assert.throws(() => preflightOperationRecipe([], 1.5), RangeError);
+        assert.equal(unknown.recipeValid, false);
+        assert.equal(JSON.stringify(unknown).includes("SECRET_OPERATION_CANARY"), false);
+        assert.equal(repeated.issues.length, PREFLIGHT_MAX_REPORTED_ISSUES);
+        assert.equal(repeated.issuesTruncated, true);
+        assert.equal(preflightOperationRecipe(null).recipeValid, false);
+        assert.equal(preflightOperationRecipe([null]).recipeValid, false);
     }),
 ]);

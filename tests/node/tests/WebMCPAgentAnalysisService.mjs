@@ -10,6 +10,7 @@ import {
     AgentAnalysisError,
 } from "../../../src/web/webmcp/AgentAnalysisError.mjs";
 import {AgentAnalysisService} from "../../../src/web/webmcp/AgentAnalysisService.mjs";
+import {AnalysisCandidateStore} from "../../../src/web/webmcp/AnalysisCandidateStore.mjs";
 import TestRegister from "../../lib/TestRegister.mjs";
 import it from "../assertionHandler.mjs";
 
@@ -46,17 +47,29 @@ function createProvenance(overrides={}) {
 function createFixture(options={}) {
     const provenance = options.provenance ?? createProvenance(),
         sample = options.sample ?? new Uint8Array([65, 66, 67]).buffer,
-        candidates = options.candidates ?? [{isUTF8: true}],
+        candidates = options.candidates ?? [{
+            isUTF8: true,
+            recipe: [{op: "From Hex", args: ["CANDIDATE_ARGUMENT_CANARY"]}],
+        }],
         evidence = {
             captureCount: 0,
             budgetCount: 0,
             invalidateCount: 0,
             magicCount: 0,
+            magicOptions: null,
             owner: null,
             signal: null,
         },
         controller = new AbortController(),
         analyses = new AnalysisCoordinator(),
+        analysisVariantIds = new Map(),
+        getAnalysisVariantId = magicOptions => {
+            const key = JSON.stringify(magicOptions);
+            if (!analysisVariantIds.has(key)) {
+                analysisVariantIds.set(key, analysisVariantIds.size + 1);
+            }
+            return analysisVariantIds.get(key);
+        },
         manager = {
             analyses,
             output: {
@@ -74,12 +87,21 @@ function createFixture(options={}) {
                 invalidateAnalysis: () => {
                     evidence.invalidateCount++;
                 },
-                magic: (value, target, owner, signal) => {
+                getMagicDecision: (target, magicOptions) => analyses.getDecision(
+                    target,
+                    getAnalysisVariantId(magicOptions)
+                ),
+                magic: (value, target, owner, signal, magicOptions) => {
                     evidence.magicCount++;
+                    evidence.magicOptions = magicOptions;
                     evidence.owner = owner;
                     evidence.signal = signal;
                     if (options.magicError) throw options.magicError;
-                    const request = analyses.ensure(target, {owner, signal});
+                    const request = analyses.ensure(target, {
+                        owner,
+                        signal,
+                        analysisVariantId: getAnalysisVariantId(magicOptions),
+                    });
                     if (request.decision === ANALYSIS_DECISION.STARTED &&
                         options.deferCompletion !== true) {
                         analyses.markRunning(request.analysis.analysisId);
@@ -96,6 +118,7 @@ function createFixture(options={}) {
             },
         },
         invocation = {
+            sessionEpoch: "session-analysis-1",
             signal: controller.signal,
             checkpoint: () => {
                 if (controller.signal.aborted) throw controller.signal.reason;
@@ -104,10 +127,16 @@ function createFixture(options={}) {
                 evidence.budgetCount++;
                 if (options.budgetError) throw options.budgetError;
             },
-        };
+        },
+        candidateStore = new AnalysisCandidateStore({
+            idFactory: (() => {
+                let nextId = 1;
+                return () => `analysis-candidate-${nextId++}`;
+            })(),
+        });
 
     return {
-        service: new AgentAnalysisService(manager),
+        service: new AgentAnalysisService(manager, {candidateStore}),
         invocation,
         analyses,
         controller,
@@ -121,26 +150,100 @@ function createFixture(options={}) {
 TestRegister.addApiTests([
     it("WebMCPAgentAnalysisService: should start and cache exact Output analysis", async () => {
         const fixture = createFixture(),
-            started = await fixture.service.inspectCurrentOutput(11, fixture.invocation),
-            cached = await fixture.service.inspectCurrentOutput(11, fixture.invocation);
+            magicOptions = {
+                depth: 2,
+                intensiveMode: true,
+                extensiveLanguageSupport: false,
+                crib: "known text",
+            },
+            started = await fixture.service.inspectCurrentOutput(
+                11,
+                magicOptions,
+                fixture.invocation
+            ),
+            cached = await fixture.service.inspectCurrentOutput(
+                11,
+                magicOptions,
+                fixture.invocation
+            );
 
         assert.equal(started.decision, ANALYSIS_DECISION.STARTED);
         assert.equal(cached.decision, ANALYSIS_DECISION.CACHED);
         assert.strictEqual(started.candidates, fixture.candidates);
         assert.strictEqual(cached.candidates, fixture.candidates);
+        assert.deepStrictEqual(started.candidateReferences, [{
+            candidateId: "analysis-candidate-1",
+            rank: 1,
+            operationNames: ["From Hex"],
+        }]);
+        assert.deepStrictEqual(cached.candidateReferences, [{
+            candidateId: "analysis-candidate-2",
+            rank: 1,
+            operationNames: ["From Hex"],
+        }]);
         assert.equal(started.analysis.target.bakeId, 11);
         assert.equal(fixture.evidence.captureCount, 2);
         assert.equal(fixture.evidence.invalidateCount, 2);
         assert.equal(fixture.evidence.magicCount, 2);
         assert.equal(fixture.evidence.budgetCount, 1);
+        assert.strictEqual(fixture.evidence.magicOptions, magicOptions);
         assert.equal(fixture.evidence.owner, ANALYSIS_OWNER.AGENT);
         assert.strictEqual(fixture.evidence.signal, fixture.invocation.signal);
+    }),
+
+    it("WebMCPAgentAnalysisService: should resolve exact candidate changes only in their binding", async () => {
+        const fixture = createFixture(),
+            inspected = await fixture.service.inspectCurrentOutput(
+                11,
+                {},
+                fixture.invocation
+            ),
+            candidateId = inspected.candidateReferences[0].candidateId,
+            patch = fixture.service.resolveCandidatePatch(
+                candidateId,
+                7,
+                fixture.invocation.sessionEpoch
+            );
+
+        assert.deepStrictEqual(patch, {
+            expectedRevision: 7,
+            changes: [{
+                type: "insert",
+                operation: "From Hex",
+                arguments: ["CANDIDATE_ARGUMENT_CANARY"],
+            }],
+        });
+        for (const [revision, sessionEpoch] of [
+            [8, fixture.invocation.sessionEpoch],
+            [7, "different-session"],
+        ]) {
+            assert.throws(
+                () => fixture.service.resolveCandidatePatch(
+                    candidateId,
+                    revision,
+                    sessionEpoch
+                ),
+                error => error instanceof AgentAnalysisError &&
+                    error.code === AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS
+            );
+        }
+
+        fixture.service.invalidateCandidates();
+        assert.throws(
+            () => fixture.service.resolveCandidatePatch(
+                candidateId,
+                7,
+                fixture.invocation.sessionEpoch
+            ),
+            error => error instanceof AgentAnalysisError &&
+                error.code === AGENT_ANALYSIS_ERROR_CODE.STALE_OUTPUT_ANALYSIS
+        );
     }),
 
     it("WebMCPAgentAnalysisService: should join UI work without consuming budget", async () => {
         const fixture = createFixture({deferCompletion: true}),
             ui = fixture.analyses.ensure(fixture.provenance, {owner: ANALYSIS_OWNER.UI}),
-            inspected = fixture.service.inspectCurrentOutput(11, fixture.invocation);
+            inspected = fixture.service.inspectCurrentOutput(11, {}, fixture.invocation);
 
         await Promise.resolve();
         fixture.analyses.markRunning(ui.analysis.analysisId);
@@ -168,7 +271,7 @@ TestRegister.addApiTests([
         for (const [terminalState, errorCode] of cases) {
             const fixture = createFixture({terminalState});
             await assert.rejects(
-                fixture.service.inspectCurrentOutput(11, fixture.invocation),
+                fixture.service.inspectCurrentOutput(11, {}, fixture.invocation),
                 error => error instanceof AgentAnalysisError && error.code === errorCode
             );
         }
@@ -184,7 +287,7 @@ TestRegister.addApiTests([
         ]) {
             const fixture = createFixture(options);
             await assert.rejects(
-                fixture.service.inspectCurrentOutput(11, fixture.invocation),
+                fixture.service.inspectCurrentOutput(11, {}, fixture.invocation),
                 error => error instanceof AgentAnalysisError && error.code === errorCode
             );
         }
@@ -194,13 +297,13 @@ TestRegister.addApiTests([
         const budgetError = new Error("BUDGET_BOUNDARY"),
             budgetFixture = createFixture({budgetError});
         await assert.rejects(
-            budgetFixture.service.inspectCurrentOutput(11, budgetFixture.invocation),
+            budgetFixture.service.inspectCurrentOutput(11, {}, budgetFixture.invocation),
             error => error === budgetError
         );
         assert.equal(budgetFixture.evidence.magicCount, 0);
 
         const cancelled = createFixture({deferCompletion: true}),
-            pending = cancelled.service.inspectCurrentOutput(11, cancelled.invocation),
+            pending = cancelled.service.inspectCurrentOutput(11, {}, cancelled.invocation),
             reason = new DOMException("cancelled", "AbortError");
         await Promise.resolve();
         assert.equal(cancelled.evidence.magicCount, 1);

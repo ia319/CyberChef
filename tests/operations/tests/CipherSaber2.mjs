@@ -12,11 +12,15 @@ TestRegister.addTests([
     {
         name: "CipherSaber2 Encrypt",
         input: "Hello World",
-        expectedMatch: /.{21}/s,
+        expectedMatch: /^[0-9a-f]{42}$/,
         recipeConfig: [
             {
                 op: "CipherSaber2 Encrypt",
                 args: [{ "option": "Latin1", "string": "test" }, 20],
+            },
+            {
+                op: "To Hex",
+                args: ["None", 0],
             },
         ],
     },
@@ -37,11 +41,15 @@ TestRegister.addTests([
     {
         name: "CipherSaber2 Encrypt",
         input: "",
-        expectedMatch: /.{10}/s,
+        expectedMatch: /^[0-9a-f]{20}$/,
         recipeConfig: [
             {
                 op: "CipherSaber2 Encrypt",
                 args: [{ "option": "Latin1", "string": "" }, 20],
+            },
+            {
+                op: "To Hex",
+                args: ["None", 0],
             },
         ],
     },

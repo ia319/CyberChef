@@ -43,6 +43,7 @@ const CACHEABLE_STATES = new Set([
 ]);
 const ANALYSIS_OWNERS = new Set(Object.values(ANALYSIS_OWNER));
 const DEFAULT_ANALYSIS_TIMEOUT_MS = 3000;
+const DEFAULT_ANALYSIS_VARIANT_ID = 1;
 const MAX_ANALYSIS_HISTORY = 64;
 
 
@@ -156,12 +157,14 @@ class AnalysisCoordinator {
      * @param {string} request.owner - Trusted analysis owner.
      * @param {AbortSignal|null} [request.signal=null] - Optional waiter cancellation signal.
      * @param {number} [request.timeoutMs=3000] - Analysis timeout budget.
+     * @param {number} [request.analysisVariantId=1] - Content-free analysis configuration identity.
      * @returns {Object} Decision, content-free snapshot and optional completion Promise.
      */
     ensure(target, request) {
         this.#validateRequest(request);
         const analysisTarget = createAnalysisTarget(target),
-            selection = this.#selectDecision(analysisTarget);
+            analysisVariantId = request.analysisVariantId ?? DEFAULT_ANALYSIS_VARIANT_ID,
+            selection = this.#selectDecision(analysisTarget, analysisVariantId);
         if (selection.decision === ANALYSIS_DECISION.CACHED) {
             return Object.freeze({
                 decision: ANALYSIS_DECISION.CACHED,
@@ -188,7 +191,7 @@ class AnalysisCoordinator {
             });
         }
 
-        const analysis = this.#createAnalysis(analysisTarget, request);
+        const analysis = this.#createAnalysis(analysisTarget, analysisVariantId, request);
         return Object.freeze({
             decision: ANALYSIS_DECISION.STARTED,
             analysis: this.#snapshot(analysis),
@@ -200,10 +203,20 @@ class AnalysisCoordinator {
      * Reports the current cache and ownership decision without creating an analysis.
      *
      * @param {Object} target - Completed Output provenance.
+     * @param {number} [analysisVariantId=1] - Content-free analysis configuration identity.
      * @returns {Object} Scheduling decision and optional existing analysis snapshot.
      */
-    getDecision(target) {
-        const selection = this.#selectDecision(createAnalysisTarget(target));
+    getDecision(target, analysisVariantId=DEFAULT_ANALYSIS_VARIANT_ID) {
+        if (!Number.isSafeInteger(analysisVariantId) || analysisVariantId < 1) {
+            throw new AnalysisWaiterError(
+                ANALYSIS_WAITER_ERROR_CODE.INVALID_ANALYSIS,
+                "Analysis request is invalid"
+            );
+        }
+        const selection = this.#selectDecision(
+            createAnalysisTarget(target),
+            analysisVariantId
+        );
         return Object.freeze({
             decision: selection.decision,
             analysis: selection.analysis ? this.#snapshot(selection.analysis) : null,
@@ -276,14 +289,18 @@ class AnalysisCoordinator {
      * Selects cache reuse, active ownership or a new lifecycle without mutating state.
      *
      * @param {Object} target - Immutable completed Output target.
+     * @param {number} analysisVariantId - Content-free analysis configuration identity.
      * @returns {Object} Decision and matching internal analysis when one exists.
      */
-    #selectDecision(target) {
-        const cached = this.#findCached(target);
+    #selectDecision(target, analysisVariantId) {
+        const cached = this.#findCached(target, analysisVariantId);
         if (cached) return {decision: ANALYSIS_DECISION.CACHED, analysis: cached};
 
         const active = this.#activeAnalyses(),
-            matching = active.find(analysis => analysisTargetMatches(analysis.target, target));
+            matching = active.find(analysis =>
+                analysis.analysisVariantId === analysisVariantId &&
+                analysisTargetMatches(analysis.target, target)
+            );
         if (matching) return {decision: ANALYSIS_DECISION.JOINED, analysis: matching};
         if (active.length) return {decision: ANALYSIS_DECISION.BUSY, analysis: active[0]};
         return {decision: ANALYSIS_DECISION.STARTED, analysis: null};
@@ -329,16 +346,18 @@ class AnalysisCoordinator {
      * Allocates the only mutable record for one analysis lifecycle.
      *
      * @param {Object} target - Immutable completed Output target.
+     * @param {number} analysisVariantId - Content-free analysis configuration identity.
      * @param {Object} request - Validated analysis request.
      * @returns {Object} Mutable internal analysis record.
      */
-    #createAnalysis(target, request) {
+    #createAnalysis(target, analysisVariantId, request) {
         if (this.#nextAnalysisId === Number.MAX_SAFE_INTEGER) {
             throw new RangeError("Analysis identity limit reached");
         }
         const analysisId = this.#nextAnalysisId++,
             analysis = {
                 analysisId,
+                analysisVariantId,
                 target,
                 owner: request.owner,
                 state: ANALYSIS_STATE.QUEUED,
@@ -362,13 +381,15 @@ class AnalysisCoordinator {
      * Finds the newest reusable result for an Output target.
      *
      * @param {Object} target - Requested completed Output target.
+     * @param {number} analysisVariantId - Content-free analysis configuration identity.
      * @returns {Object|null} Cached analysis record or null.
      */
-    #findCached(target) {
+    #findCached(target, analysisVariantId) {
         const analyses = [...this.#analyses.values()];
         for (let index = analyses.length - 1; index >= 0; index--) {
             const analysis = analyses[index];
-            if (CACHEABLE_STATES.has(analysis.state) &&
+            if (analysis.analysisVariantId === analysisVariantId &&
+                CACHEABLE_STATES.has(analysis.state) &&
                 analysisTargetMatches(analysis.target, target)) {
                 return analysis;
             }
@@ -467,7 +488,10 @@ class AnalysisCoordinator {
                     typeof request.signal.addEventListener !== "function" ||
                     typeof request.signal.removeEventListener !== "function")) ||
             (request.timeoutMs !== undefined &&
-                (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 0))) {
+                (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 0)) ||
+            (request.analysisVariantId !== undefined &&
+                (!Number.isSafeInteger(request.analysisVariantId) ||
+                    request.analysisVariantId < 1))) {
             throw new AnalysisWaiterError(
                 ANALYSIS_WAITER_ERROR_CODE.INVALID_ANALYSIS,
                 "Analysis request is invalid"
@@ -485,6 +509,7 @@ export {
     AnalysisCoordinator,
     AnalysisWaiterError,
     DEFAULT_ANALYSIS_TIMEOUT_MS,
+    DEFAULT_ANALYSIS_VARIANT_ID,
     analysisTargetMatches,
     createAnalysisTarget,
 };

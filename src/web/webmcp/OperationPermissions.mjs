@@ -1,9 +1,13 @@
 import {
-    OPERATION_CAPABILITY_MANIFEST,
-    OPERATION_POLICY,
-    REVIEW_STATUS,
-} from "./OperationCapabilityManifest.mjs";
-import {getOperationProfile} from "./OperationProfiles.mjs";
+    OPERATION_ACCESS,
+    OPERATION_ACCESS_AUDIT,
+} from "./OperationAccessAudit.mjs";
+
+const OPERATION_POLICY = Object.freeze({
+    ALLOWED: "allowed",
+    BLOCKED: "blocked",
+    USER_ACTION_REQUIRED: "userActionRequired",
+});
 
 const MUTATION_ACTION = Object.freeze({
     INSERT: "insert",
@@ -38,23 +42,33 @@ const REDUCTION_MUTATION_ACTIONS = Object.freeze([
     MUTATION_ACTION.DISABLE,
 ]);
 
+const NO_MUTATION_ACTIONS = Object.freeze([]);
+
 const UNKNOWN_OPERATION_PERMISSIONS = Object.freeze({
     discoverable: false,
-    reviewStatus: null,
-    supportedMutationActions: Object.freeze([]),
+    operationAccess: OPERATION_ACCESS.UNREVIEWED,
+    supportedMutationActions: NO_MUTATION_ACTIONS,
     agentBakeAllowed: false,
+    mutationPolicy: OPERATION_POLICY.BLOCKED,
+    agentBakePolicy: OPERATION_POLICY.BLOCKED,
 });
 
-const PERMISSIONS_BY_NAME = new Map(OPERATION_CAPABILITY_MANIFEST.getOperationNames().map(operationName => {
-    const capability = OPERATION_CAPABILITY_MANIFEST.getOperationCapability(operationName),
-        profile = getOperationProfile(operationName),
-        safe = capability.reviewStatus === REVIEW_STATUS.SAFE && !!profile &&
-            capability.mutationPolicy === OPERATION_POLICY.ALLOWED,
+const PERMISSIONS_BY_NAME = new Map(OPERATION_ACCESS_AUDIT.getOperationNames().map(operationName => {
+    const access = OPERATION_ACCESS_AUDIT.getOperationAccess(operationName),
+        direct = access === OPERATION_ACCESS.DIRECT,
+        approval = access === OPERATION_ACCESS.APPROVAL,
+        excluded = access === OPERATION_ACCESS.EXCLUDED,
+        mutationPolicy = direct ? OPERATION_POLICY.ALLOWED :
+            approval ? OPERATION_POLICY.USER_ACTION_REQUIRED : OPERATION_POLICY.BLOCKED,
+        agentBakePolicy = mutationPolicy,
         permissions = Object.freeze({
-            discoverable: true,
-            reviewStatus: capability.reviewStatus,
-            supportedMutationActions: safe ? SAFE_MUTATION_ACTIONS : REDUCTION_MUTATION_ACTIONS,
-            agentBakeAllowed: safe && capability.agentBakePolicy === OPERATION_POLICY.ALLOWED,
+            discoverable: !excluded,
+            operationAccess: access,
+            supportedMutationActions: excluded ? NO_MUTATION_ACTIONS :
+                direct || approval ? SAFE_MUTATION_ACTIONS : REDUCTION_MUTATION_ACTIONS,
+            agentBakeAllowed: direct,
+            mutationPolicy,
+            agentBakePolicy,
         });
     return [operationName, permissions];
 }));
@@ -98,6 +112,13 @@ function evaluateOperationMutation(action, operationName, postflight) {
         return Object.freeze({allowed: false, code: MUTATION_DECISION_CODE.ACTION_BLOCKED});
     }
     if (!postflight.standardModificationAllowed) {
+        if (postflight.approvalModificationAllowed === true) {
+            return Object.freeze({
+                allowed: true,
+                code: MUTATION_DECISION_CODE.ALLOWED,
+                approvalRequired: true,
+            });
+        }
         return Object.freeze({allowed: false, code: MUTATION_DECISION_CODE.RECIPE_BLOCKED});
     }
     return Object.freeze({allowed: true, code: MUTATION_DECISION_CODE.ALLOWED});

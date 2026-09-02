@@ -1,11 +1,15 @@
 import OperationConfig from "../../core/config/OperationConfig.json" with { type: "json" };
 import { fuzzyMatch } from "../../core/lib/FuzzyMatch.mjs";
 import {
+    OPERATION_ACCESS,
+    OPERATION_ACCESS_AUDIT,
+} from "./OperationAccessAudit.mjs";
+import {resolveOperationArguments} from "./OperationArguments.mjs";
+import {
     OPERATION_DESCRIPTION_MAX_CODE_POINTS,
     sanitizeOperationDescription,
 } from "./CatalogText.mjs";
 import { describeOperationIngredients } from "./OperationIngredients.mjs";
-import { getOperationProfile } from "./OperationProfiles.mjs";
 
 const OPERATION_SEARCH_DEFAULT_LIMIT = 5;
 const OPERATION_SEARCH_MAX_LIMIT = 10;
@@ -16,14 +20,19 @@ const OPERATION_SEARCH_MAX_QUERY_CODE_POINTS = 128;
  * Creates an immutable static Operation catalog with stable search behavior.
  *
  * @param {Object} config - Generated Operation configuration keyed by exact name.
+ * @param {Function} [includeOperation] - Optional exact-name inclusion policy.
  * @returns {Object} Catalog lookup and search interface.
  */
-function createOperationCatalog(config=OperationConfig) {
+function createOperationCatalog(config=OperationConfig, includeOperation=() => true) {
     if (!config || typeof config !== "object" || Array.isArray(config)) {
         throw new TypeError("Operation configuration must be an object");
     }
+    if (typeof includeOperation !== "function") {
+        throw new TypeError("Operation inclusion policy must be a function");
+    }
 
-    const entries = Object.entries(config).map(([name, operation]) => Object.freeze({
+    const configEntries = Object.entries(config).filter(([name]) => includeOperation(name)),
+        entries = configEntries.map(([name, operation]) => Object.freeze({
             name,
             description: sanitizeOperationDescription(operation?.description),
             module: typeof operation?.module === "string" ? operation.module : "",
@@ -34,10 +43,14 @@ function createOperationCatalog(config=OperationConfig) {
             flowControl: operation?.flowControl === true,
         })),
         entriesByName = new Map(entries.map(entry => [entry.name, entry])),
-        ingredientsByName = new Map(Object.entries(config).map(([name, operation]) => [
+        ingredientsByName = new Map(configEntries.map(([name, operation]) => [
             name,
             Array.isArray(operation?.args) ? operation.args : [],
         ])),
+        defaultArgumentsByName = new Map(configEntries.map(([name]) => {
+            const result = config === OperationConfig ? resolveOperationArguments(name) : null;
+            return [name, result?.valid ? result.arguments : null];
+        })),
         names = Object.freeze(entries.map(entry => entry.name));
 
     /**
@@ -74,7 +87,7 @@ function createOperationCatalog(config=OperationConfig) {
             ingredients,
             optionOffset,
             optionLimit,
-            getOperationProfile(name)
+            defaultArgumentsByName.get(name)
         );
     }
 
@@ -140,7 +153,9 @@ function createOperationCatalog(config=OperationConfig) {
     });
 }
 
-const OPERATION_CATALOG = createOperationCatalog();
+const OPERATION_CATALOG = createOperationCatalog(OperationConfig, operationName =>
+    OPERATION_ACCESS_AUDIT.getOperationAccess(operationName) !== OPERATION_ACCESS.EXCLUDED
+);
 
 export {
     OPERATION_CATALOG,

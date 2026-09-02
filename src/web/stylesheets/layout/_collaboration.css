@@ -67,6 +67,41 @@
     min-height: 1.35em;
 }
 
+.webmcp-approval {
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid var(--primary-border-colour);
+    border-radius: 3px;
+    background-color: var(--secondary-background-colour);
+}
+
+.webmcp-approval:focus {
+    outline: 2px solid var(--primary-font-colour);
+    outline-offset: 2px;
+}
+
+.webmcp-approval-detail,
+.webmcp-approval-effect {
+    margin: 3px 0 0;
+    line-height: 1.35;
+}
+
+.webmcp-approval-effect {
+    font-weight: 500;
+}
+
+.webmcp-approval-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+#webmcp-collaboration .webmcp-approval-actions .btn {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
 .webmcp-step-badge {
     vertical-align: middle;
 }

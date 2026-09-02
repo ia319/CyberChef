@@ -85,6 +85,62 @@ TestRegister.addApiTests([
         assert.equal(JSON.stringify(unsafe).includes("SECRET_CANARY"), false);
     }),
 
+    it("WebMCPToolResult: should expose only a reviewed approval request reference", () => {
+        const result = createErrorResult(TOOL_ERROR_CODE.USER_ACTION_REQUIRED, {
+            approvalRequestId: "approval-request-1",
+            state: {
+                sessionEpoch: "session-epoch-1",
+                recipeRevision: 7,
+                approvalState: "pending",
+            },
+        });
+
+        assert.deepStrictEqual(result, {
+            version: "1",
+            ok: false,
+            error: {
+                code: "USER_ACTION_REQUIRED",
+                message: "The user must approve this exact action in CyberChef.",
+                retryable: true,
+                userActionRequired: true,
+                approvalRequestId: "approval-request-1",
+            },
+            state: {
+                sessionEpoch: "session-epoch-1",
+                recipeRevision: 7,
+                approvalState: "pending",
+            },
+        });
+
+        const unsafe = createErrorResult(TOOL_ERROR_CODE.USER_ACTION_REQUIRED, {
+            approvalRequestId: "approval-request-1",
+            state: {
+                sessionEpoch: "session-epoch-1",
+                recipeRevision: 7,
+                approvalState: "pending",
+                rawInput: "SECRET_CANARY",
+            },
+        });
+        assert.equal(unsafe.error.code, TOOL_ERROR_CODE.INTERNAL_ERROR);
+        assert.equal(JSON.stringify(unsafe).includes("SECRET_CANARY"), false);
+
+        let getterCalled = false;
+        const accessor = {};
+        Object.defineProperty(accessor, "approvalRequestId", {
+            enumerable: true,
+            get: () => {
+                getterCalled = true;
+                return "approval-request-1";
+            },
+        });
+        accessor.state = result.state;
+        assert.equal(
+            createErrorResult(TOOL_ERROR_CODE.USER_ACTION_REQUIRED, accessor).error.code,
+            TOOL_ERROR_CODE.INTERNAL_ERROR
+        );
+        assert.equal(getterCalled, false);
+    }),
+
     it("WebMCPToolResult: should reject values that JSON would alter or omit", () => {
         const cycle = {};
         cycle.self = cycle;

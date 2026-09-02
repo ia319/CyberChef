@@ -20,8 +20,9 @@ function createSearchItem(entry) {
     const permissions = getOperationPermissions(entry.name);
     return {
         name: entry.name,
-        reviewStatus: permissions.reviewStatus,
+        operationAccess: permissions.operationAccess,
         supportedActions: permissions.supportedMutationActions,
+        mutationPolicy: permissions.mutationPolicy,
     };
 }
 
@@ -114,15 +115,17 @@ function createOperationToolHandlers(catalog=OPERATION_CATALOG) {
      * @returns {Object} Handler data containing paginated arguments and options.
      */
     function getOperationDetails(input) {
-        const operation = catalog.getOperation(input.name);
-        if (!operation) throw new ToolExecutionError(TOOL_ERROR_CODE.UNKNOWN_OPERATION);
+        const operation = catalog.getOperation(input.name),
+            permissions = getOperationPermissions(input.name);
+        if (!operation || !permissions.discoverable) {
+            throw new ToolExecutionError(TOOL_ERROR_CODE.UNKNOWN_OPERATION);
+        }
 
         const argumentOffset = input.argumentOffset ?? 0,
             argumentLimit = input.argumentLimit ?? OPERATION_ARGUMENT_DEFAULT_LIMIT,
             optionOffset = input.optionOffset ?? 0,
             optionLimit = input.optionLimit,
             ingredientPage = catalog.getOperationIngredients(input.name, optionOffset, optionLimit),
-            permissions = getOperationPermissions(input.name),
             requestedArguments = ingredientPage.arguments
                 .slice(argumentOffset, argumentOffset + argumentLimit)
                 .map(createArgumentDetails),
@@ -134,9 +137,11 @@ function createOperationToolHandlers(catalog=OPERATION_CATALOG) {
                 outputType: operation.presentType,
                 manualBake: operation.manualBake,
                 flowControl: operation.flowControl,
-                reviewStatus: permissions.reviewStatus,
+                operationAccess: permissions.operationAccess,
                 supportedActions: permissions.supportedMutationActions,
                 agentBakeAllowed: permissions.agentBakeAllowed,
+                mutationPolicy: permissions.mutationPolicy,
+                agentBakePolicy: permissions.agentBakePolicy,
             };
         let argumentCount = requestedArguments.length,
             optionCount = requestedOptions.length,

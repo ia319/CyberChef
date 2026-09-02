@@ -1,4 +1,6 @@
 import {ANALYSIS_STATE} from "../analysis/AnalysisCoordinator.mjs";
+import {MAX_ANALYSIS_CANDIDATES} from "../analysis/AnalysisPolicy.mjs";
+import {ANALYSIS_CANDIDATE_ID_PATTERN} from "./AnalysisCandidateStore.mjs";
 import {OPERATION_CATALOG} from "./OperationCatalog.mjs";
 
 
@@ -129,13 +131,45 @@ function getOperationNames(items) {
 
 
 /**
+ * Copies page-issued candidate references without exposing their internal Recipe arguments.
+ *
+ * @param {*} references - Candidate references created by the page-local candidate store.
+ * @returns {Object[]} Bounded ranked candidate identities and Operation sequences.
+ */
+function getCandidateReferences(references) {
+    if (!Array.isArray(references)) return [];
+    const candidates = [];
+    for (const reference of references) {
+        if (!reference || typeof reference !== "object" ||
+            typeof reference.candidateId !== "string" ||
+            !ANALYSIS_CANDIDATE_ID_PATTERN.test(reference.candidateId) ||
+            !Number.isSafeInteger(reference.rank) || reference.rank < 1 ||
+            !Array.isArray(reference.operationNames) ||
+            reference.operationNames.length < 1 ||
+            reference.operationNames.length > MAX_ANALYSIS_OPERATION_NAMES ||
+            reference.operationNames.some(name =>
+                typeof name !== "string" || !OPERATION_CATALOG.getOperation(name)
+            )) continue;
+        candidates.push({
+            candidateId: reference.candidateId,
+            rank: reference.rank,
+            operationNames: [...reference.operationNames],
+        });
+        if (candidates.length === MAX_ANALYSIS_CANDIDATES) break;
+    }
+    return candidates;
+}
+
+
+/**
  * Reconstructs the approved WebMCP projection from one completed internal analysis.
  *
  * @param {Object} analysis - Analysis coordinator snapshot.
  * @param {Object[]} candidates - Trusted internal Magic candidates.
+ * @param {Object[]} [candidateReferences=[]] - Opaque references to exact internal Recipes.
  * @returns {Object} Bounded analysis data without raw or high-precision fields.
  */
-function serializeOutputAnalysis(analysis, candidates) {
+function serializeOutputAnalysis(analysis, candidates, candidateReferences=[]) {
     if (!analysis || analysis.terminalState !== ANALYSIS_STATE.SIGNALS_READY ||
         !Number.isSafeInteger(analysis.analysisId) || analysis.analysisId < 1 ||
         !Array.isArray(candidates) || candidates.length < 1) {
@@ -166,6 +200,7 @@ function serializeOutputAnalysis(analysis, candidates) {
         topLanguageId: getTopLanguageId(topCandidate.languageScores),
         matchingOperationNames: getOperationNames(topCandidate.matchingOps),
         candidateOperationNames: getOperationNames(topCandidate.recipe),
+        candidates: getCandidateReferences(candidateReferences),
     };
 }
 
@@ -175,6 +210,7 @@ export {
     UNKNOWN_ANALYSIS_ID,
     getDetectedTypeId,
     getEntropyBand,
+    getCandidateReferences,
     getTopLanguageId,
     serializeOutputAnalysis,
 };

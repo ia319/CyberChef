@@ -1,9 +1,9 @@
-const RECIPE_PATCH_MAX_COMMANDS = 20;
-const RECIPE_PATCH_MAX_ARGUMENTS = 32;
-const RECIPE_PATCH_MAX_ARGUMENT_CODE_POINTS = 16 * 1024;
+import {copyToggleStringArgument} from "./RecipeArgument.mjs";
+
 const RECIPE_PATCH_MAX_OPERATION_CODE_POINTS = 128;
 const RECIPE_STEP_ID_MAX_CODE_POINTS = 64;
 const RECIPE_STEP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const INVALID_PATCH_ARGUMENT = Symbol("invalidPatchArgument");
 
 const RECIPE_PATCH_ERROR_CODE = Object.freeze({
     INVALID_RECIPE: "INVALID_RECIPE",
@@ -60,6 +60,39 @@ function isPlainRecord(value) {
 
 
 /**
+ * Detaches one Recipe argument while enforcing the shapes supported by the visible Recipe.
+ *
+ * @param {*} value - Candidate argument value.
+ * @returns {*} Detached value or the invalid argument sentinel.
+ */
+function copyPatchArgument(value) {
+    if (typeof value === "boolean" || typeof value === "string" ||
+        typeof value === "number" && Number.isFinite(value)) return value;
+    return copyToggleStringArgument(value) ?? INVALID_PATCH_ARGUMENT;
+}
+
+
+/**
+ * Detaches a dense list of supported Recipe arguments.
+ *
+ * @param {*} values - Candidate argument list.
+ * @returns {Array|null} Detached arguments, or null for an invalid list.
+ */
+function copyPatchArguments(values) {
+    if (!Array.isArray(values) || Reflect.ownKeys(values).length !== values.length + 1 ||
+        Object.keys(values).length !== values.length) return null;
+
+    const copied = [];
+    for (const value of values) {
+        const argument = copyPatchArgument(value);
+        if (argument === INVALID_PATCH_ARGUMENT) return null;
+        copied.push(argument);
+    }
+    return copied;
+}
+
+
+/**
  * Checks a stable Recipe step identifier.
  *
  * @param {*} stepId - Candidate step identifier.
@@ -83,26 +116,15 @@ function copyRecipeStep(step) {
         throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_RECIPE);
     }
 
+    const args = copyPatchArguments(step.operation.args);
+    if (!args) throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_RECIPE);
     const operation = {
         op: step.operation.op,
-        args: [...step.operation.args],
+        args,
     };
     if (step.operation.disabled === true) operation.disabled = true;
     if (step.operation.breakpoint === true) operation.breakpoint = true;
     return {stepId: step.stepId, operation};
-}
-
-
-/**
- * Validates an Agent-supported argument value.
- *
- * @param {*} value - Candidate argument value.
- * @returns {boolean} Whether the value is supported.
- */
-function isPatchArgument(value) {
-    return typeof value === "boolean" ||
-        typeof value === "number" && Number.isFinite(value) ||
-        typeof value === "string" && [...value].length <= RECIPE_PATCH_MAX_ARGUMENT_CODE_POINTS;
 }
 
 
@@ -194,8 +216,7 @@ function applyRecipePatch(snapshot, commands, createStepId) {
     if (!isPlainRecord(snapshot) || !Array.isArray(snapshot.steps)) {
         throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_RECIPE);
     }
-    if (!Array.isArray(commands) || commands.length < 1 ||
-        commands.length > RECIPE_PATCH_MAX_COMMANDS || typeof createStepId !== "function") {
+    if (!Array.isArray(commands) || commands.length < 1 || typeof createStepId !== "function") {
         throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_PATCH);
     }
 
@@ -226,9 +247,11 @@ function applyRecipePatch(snapshot, commands, createStepId) {
             );
             if (typeof command.operation !== "string" || command.operation.length < 1 ||
                 [...command.operation].length > RECIPE_PATCH_MAX_OPERATION_CODE_POINTS ||
-                !Array.isArray(command.arguments) ||
-                command.arguments.length > RECIPE_PATCH_MAX_ARGUMENTS ||
-                !command.arguments.every(isPatchArgument)) {
+                !Array.isArray(command.arguments)) {
+                throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, commandIndex);
+            }
+            const arguments_ = copyPatchArguments(command.arguments);
+            if (!arguments_) {
                 throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, commandIndex);
             }
 
@@ -243,7 +266,7 @@ function applyRecipePatch(snapshot, commands, createStepId) {
 
             const step = {
                 stepId,
-                operation: {op: command.operation, args: [...command.arguments]},
+                operation: {op: command.operation, args: arguments_},
             };
             steps.splice(anchor?.index ?? steps.length, 0, step);
             stepIds.add(stepId);
@@ -313,14 +336,15 @@ function applyRecipePatch(snapshot, commands, createStepId) {
             if (command.enabled) step.operation.breakpoint = true;
             else delete step.operation.breakpoint;
         } else if (type === "setArgument") {
+            const value = copyPatchArgument(command.value);
             if (!Number.isSafeInteger(command.argumentIndex) || command.argumentIndex < 0 ||
-                command.argumentIndex >= RECIPE_PATCH_MAX_ARGUMENTS || !isPatchArgument(command.value)) {
+                value === INVALID_PATCH_ARGUMENT) {
                 throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.INVALID_COMMAND, commandIndex);
             }
             if (command.argumentIndex >= step.operation.args.length) {
                 throw new RecipePatchError(RECIPE_PATCH_ERROR_CODE.ARGUMENT_OUT_OF_RANGE, commandIndex);
             }
-            step.operation.args[command.argumentIndex] = command.value;
+            step.operation.args[command.argumentIndex] = value;
         }
         actions.push(Object.freeze({
             commandIndex,
@@ -345,9 +369,6 @@ function applyRecipePatch(snapshot, commands, createStepId) {
 
 export {
     RECIPE_PATCH_ERROR_CODE,
-    RECIPE_PATCH_MAX_ARGUMENTS,
-    RECIPE_PATCH_MAX_ARGUMENT_CODE_POINTS,
-    RECIPE_PATCH_MAX_COMMANDS,
     RecipePatchError,
     applyRecipePatch,
 };

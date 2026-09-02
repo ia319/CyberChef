@@ -1,6 +1,11 @@
 import assert from "assert";
 import {RUN_DECISION, RUN_STATE} from "../../../src/web/run/RunCoordinator.mjs";
 import {
+    APPROVAL_MODE,
+    APPROVAL_STATE,
+    ApprovalCoordinator,
+} from "../../../src/web/webmcp/ApprovalCoordinator.mjs";
+import {
     AGENT_BAKE_ERROR_CODE,
     AgentBakeError,
 } from "../../../src/web/webmcp/AgentBakeError.mjs";
@@ -72,21 +77,67 @@ function createBakeResult(overrides={}) {
 
 
 /**
+ * Creates the exact pre-Run target used by a one-use Bake permit.
+ *
+ * @returns {Object} Content-free target without a Bake identifier.
+ */
+function createPreparedTarget() {
+    const target = {...createBakeResult().target};
+    delete target.bakeId;
+    return Object.freeze(target);
+}
+
+
+/**
  * Executes the protected Bake handler through the shared provider boundary.
  *
  * @param {Object} service - Agent Bake service fixture.
  * @param {Object} [input={expectedRevision: 7}] - Tool input.
+ * @param {ApprovalCoordinator|null} [approvals=null] - Optional approval owner.
+ * @param {Object|undefined} [options] - Optional host invocation options.
  * @returns {Promise<Object>} Final tool result envelope.
  */
-async function executeBake(service, input={expectedRevision: 7}) {
-    const handler = createBakeRecipeToolHandlers(service)[TOOL_NAME.BAKE_RECIPE],
+async function executeBake(service, input={expectedRevision: 7}, approvals=null, options) {
+    const handler = createBakeRecipeToolHandlers(service, approvals)[TOOL_NAME.BAKE_RECIPE],
         session = new CollaborationSession(true, () => 5);
     session.start();
     return await executeTool(
         TOOL_CONTRACTS[TOOL_NAME.BAKE_RECIPE],
         (value, signal) => session.execute(handler, value, signal),
-        input
+        input,
+        options
     );
+}
+
+
+/**
+ * Grants mutation and one exact Bake slots for a test target.
+ *
+ * @param {ApprovalCoordinator} approvals - Test approval owner.
+ * @param {Object} target - Exact prepared Bake target.
+ * @returns {Promise<string>} Opaque approval request identifier.
+ */
+async function approveBake(approvals, target) {
+    const action = Object.freeze({kind: "recipeMutation", expectedRevision: 6}),
+        request = await approvals.requestApproval({
+            sessionEpoch: 5,
+            action,
+            summary: {
+                operationNames: ["Generate HOTP"],
+                changeTypes: ["insert"],
+                sensitiveParameterNames: ["Secret"],
+                riskFlags: ["secretInput"],
+            },
+        });
+    approvals.approve(request.requestId, 5, APPROVAL_MODE.RECIPE_AND_BAKE);
+    await approvals.consumeMutation({requestId: request.requestId, sessionEpoch: 5, action});
+    await approvals.completeMutation({
+        requestId: request.requestId,
+        sessionEpoch: 5,
+        succeeded: true,
+        bakeTarget: target,
+    });
+    return request.requestId;
 }
 
 
@@ -181,5 +232,187 @@ TestRegister.addApiTests([
 
         assert.equal(result.error.code, TOOL_ERROR_CODE.INTERNAL_ERROR);
         assert.equal(JSON.stringify(result).includes(DATA_CANARIES[1]), false);
+    }),
+
+    it("WebMCPBakeRecipeToolHandlers: should consume one exact approved Bake", async () => {
+        const approvals = new ApprovalCoordinator({
+                idFactory: () => "approval-request-1",
+            }),
+            target = createPreparedTarget(),
+            requestId = await approveBake(approvals, target);
+        let prepareCount = 0,
+            commitCount = 0,
+            receivedApprovalMode = false;
+        const service = {
+                ensureActiveBake: async () => {
+                    throw new Error("Standard Bake path must remain unused");
+                },
+                prepareActiveBake: async (expectedRevision, signal, userApproval) => {
+                    prepareCount++;
+                    assert.equal(expectedRevision, 7);
+                    assert(signal instanceof AbortSignal);
+                    receivedApprovalMode = userApproval;
+                    return Object.freeze({target});
+                },
+                commitPreparedBake: async (preparedBake, signal) => {
+                    commitCount++;
+                    assert.strictEqual(preparedBake.target, target);
+                    assert(signal instanceof AbortSignal);
+                    assert.equal(signal.aborted, false);
+                    return createBakeResult();
+                },
+            },
+            result = await executeBake(service, {
+                expectedRevision: 7,
+                bakeApprovalRequestId: requestId,
+            }, approvals);
+
+        assert.equal(result.ok, true);
+        assert.equal(prepareCount, 1);
+        assert.equal(commitCount, 1);
+        assert.equal(receivedApprovalMode, true);
+        assert.equal(approvals.getState().state, APPROVAL_STATE.COMPLETE);
+
+        const replay = await executeBake(service, {
+            expectedRevision: 7,
+            bakeApprovalRequestId: requestId,
+        }, approvals);
+        assert.equal(replay.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);
+        assert.equal(commitCount, 1);
+    }),
+
+    it("WebMCPBakeRecipeToolHandlers: should reject a substituted approved target", async () => {
+        const approvals = new ApprovalCoordinator({
+                idFactory: () => "approval-request-1",
+            }),
+            target = createPreparedTarget(),
+            requestId = await approveBake(approvals, target);
+        let commitCount = 0;
+        const result = await executeBake({
+            ensureActiveBake: async () => {
+                throw new Error("Standard Bake path must remain unused");
+            },
+            prepareActiveBake: async () => Object.freeze({
+                target: Object.freeze({...target, activeOutputTabId: 2}),
+            }),
+            commitPreparedBake: async () => {
+                commitCount++;
+                return createBakeResult();
+            },
+        }, {
+            expectedRevision: 7,
+            bakeApprovalRequestId: requestId,
+        }, approvals);
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.INVALID_REQUEST);
+        assert.equal(commitCount, 0);
+        assert.equal(approvals.getState().state, APPROVAL_STATE.BAKE_AVAILABLE);
+    }),
+
+    it("WebMCPBakeRecipeToolHandlers: should settle a failed approved Bake", async () => {
+        const approvals = new ApprovalCoordinator({
+                idFactory: () => "approval-request-1",
+            }),
+            target = createPreparedTarget(),
+            requestId = await approveBake(approvals, target),
+            failed = createBakeResult({
+                terminalState: RUN_STATE.FAILED,
+                progress: 1,
+                stepId: "recipe-step-2",
+                provenance: {
+                    ...createBakeResult().provenance,
+                    terminalState: RUN_STATE.FAILED,
+                },
+            }),
+            result = await executeBake({
+                ensureActiveBake: async () => {
+                    throw new Error("Standard Bake path must remain unused");
+                },
+                prepareActiveBake: async () => Object.freeze({target}),
+                commitPreparedBake: async () => failed,
+            }, {
+                expectedRevision: 7,
+                bakeApprovalRequestId: requestId,
+            }, approvals);
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.BAKE_FAILED);
+        assert.equal(approvals.getState().state, APPROVAL_STATE.CANCELLED);
+        assert.equal(JSON.stringify(result).includes(DATA_CANARIES[1]), false);
+    }),
+
+    it("WebMCPBakeRecipeToolHandlers: should settle approval after invocation cancellation", async () => {
+        let requestNumber = 0,
+            commitCount = 0;
+        const approvals = new ApprovalCoordinator({
+                idFactory: () => `approval-request-${++requestNumber}`,
+            }),
+            target = createPreparedTarget(),
+            requestId = await approveBake(approvals, target),
+            invocationController = new AbortController(),
+            approvalBoundary = {
+                consumeBake: async options => {
+                    const permit = await approvals.consumeBake(options);
+                    invocationController.abort(new DOMException("Invocation cancelled", "AbortError"));
+                    return permit;
+                },
+                completeBake: (...args) => approvals.completeBake(...args),
+                getState: () => approvals.getState(),
+            },
+            service = {
+                ensureActiveBake: async () => {
+                    throw new Error("Standard Bake path must remain unused");
+                },
+                prepareActiveBake: async () => Object.freeze({target}),
+                commitPreparedBake: async () => {
+                    commitCount++;
+                    return createBakeResult();
+                },
+            };
+
+        await assert.rejects(
+            executeBake(service, {
+                expectedRevision: 7,
+                bakeApprovalRequestId: requestId,
+            }, approvalBoundary, {signal: invocationController.signal}),
+            error => error instanceof DOMException && error.name === "AbortError"
+        );
+        assert.equal(commitCount, 0);
+        assert.equal(approvals.getState().state, APPROVAL_STATE.CANCELLED);
+
+        const next = await approvals.requestApproval({
+            sessionEpoch: 5,
+            action: {kind: "recipeMutation", expectedRevision: 7},
+            summary: {
+                operationNames: ["Generate HOTP"],
+                changeTypes: ["insert"],
+                sensitiveParameterNames: ["Secret"],
+                riskFlags: ["secretInput"],
+            },
+        });
+        assert.equal(next.requestId, "approval-request-2");
+        assert.equal(next.state, APPROVAL_STATE.PENDING);
+    }),
+
+    it("WebMCPBakeRecipeToolHandlers: should preserve approved pre-Run failures", async () => {
+        const approvals = new ApprovalCoordinator({
+                idFactory: () => "approval-request-1",
+            }),
+            target = createPreparedTarget(),
+            requestId = await approveBake(approvals, target),
+            result = await executeBake({
+                ensureActiveBake: async () => {
+                    throw new Error("Standard Bake path must remain unused");
+                },
+                prepareActiveBake: async () => Object.freeze({target}),
+                commitPreparedBake: async () => {
+                    throw new AgentBakeError(AGENT_BAKE_ERROR_CODE.BAKE_BUSY);
+                },
+            }, {
+                expectedRevision: 7,
+                bakeApprovalRequestId: requestId,
+            }, approvals);
+
+        assert.equal(result.error.code, TOOL_ERROR_CODE.BAKE_BUSY);
+        assert.equal(approvals.getState().state, APPROVAL_STATE.CANCELLED);
     }),
 ]);
