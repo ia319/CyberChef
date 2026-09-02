@@ -343,6 +343,70 @@ module.exports = {
         browser.sendKeys("#webmcp-stop", browser.Keys.ENTER);
     },
 
+    "Prepared Recipe patches wait for active Bakes": browser => {
+        browser.execute(() => {
+            const app = window.app,
+                manager = app.manager,
+                recipe = manager.recipe;
+            try {
+                manager.controls.setAutoBake(false);
+                app.setRecipeConfig([]);
+                const directPatch = recipe.prepareAgentPatch({
+                    expectedRevision: recipe.getRecipeRevision(),
+                    changes: [{type: "insert", operation: "To Base64"}],
+                });
+                let directErrorCode = null,
+                    approvedErrorCode = null;
+
+                app.baking = true;
+                try {
+                    recipe.commitAgentPatch(directPatch);
+                } catch (err) {
+                    directErrorCode = err.code;
+                }
+                const directUnchanged = recipe.getConfig().length === 0;
+
+                app.baking = false;
+                const directResult = recipe.commitAgentPatch(directPatch),
+                    approvedPatch = recipe.prepareAgentPatch({
+                        expectedRevision: directResult.recipeRevision,
+                        changes: [{
+                            type: "insert",
+                            operation: "Generate HOTP",
+                            arguments: ["WebMCP account", 6, 0],
+                        }],
+                    });
+
+                app.baking = true;
+                try {
+                    recipe.commitApprovedAgentPatch(approvedPatch, false);
+                } catch (err) {
+                    approvedErrorCode = err.code;
+                }
+                const approvedUnchanged = recipe.getConfig().length === 1;
+
+                app.baking = false;
+                recipe.commitApprovedAgentPatch(approvedPatch, false);
+                return {
+                    directErrorCode,
+                    approvedErrorCode,
+                    directUnchanged,
+                    approvedUnchanged,
+                    operationNames: recipe.getConfig().map(step => step.op),
+                };
+            } finally {
+                app.baking = false;
+                app.setRecipeConfig([]);
+            }
+        }, [], ({value}) => {
+            browser.assert.strictEqual(value.directErrorCode, "BAKE_BUSY");
+            browser.assert.strictEqual(value.approvedErrorCode, "BAKE_BUSY");
+            browser.assert.strictEqual(value.directUnchanged, true);
+            browser.assert.strictEqual(value.approvedUnchanged, true);
+            browser.assert.deepStrictEqual(value.operationNames, ["To Base64", "Generate HOTP"]);
+        });
+    },
+
     "Generate HOTP Recipe changes require one visible approval": browser => {
         browser.sendKeys("#webmcp-start", browser.Keys.ENTER);
         browser.executeAsync(async done => {

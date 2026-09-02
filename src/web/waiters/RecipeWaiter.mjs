@@ -587,9 +587,7 @@ class RecipeWaiter {
      * @returns {Object} One-use prepared patch and content-free authorization state.
      */
     prepareAgentPatch(input) {
-        if (this.app.baking) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
-        }
+        this.#requireBakeIdle();
 
         const patchContext = this.captureAgentPatchContext(),
             autoBakeContext = this.agentAutoBakeEnabled && this.app.autoBake_ ?
@@ -640,6 +638,7 @@ class RecipeWaiter {
      * @returns {Object} Bounded transaction result.
      */
     commitAgentPatch(preparedPatch, applicationWorkFactory=null) {
+        this.#requireBakeIdle();
         const prepared = this.#takePreparedAgentPatch(preparedPatch),
             result = this.transaction.commitAgentPatch(prepared.transactionPatch);
         this.#publishAgentPatchResult(result, prepared.autoBakeTarget, applicationWorkFactory);
@@ -658,6 +657,7 @@ class RecipeWaiter {
         if (typeof includeBakeTarget !== "boolean") {
             throw new TypeError("Approved Bake target choice is invalid");
         }
+        this.#requireBakeIdle();
         const prepared = this.#takePreparedAgentPatch(preparedPatch),
             result = this.transaction.commitAgentPatch(prepared.transactionPatch),
             bakeTarget = includeBakeTarget && prepared.patchContext ?
@@ -696,6 +696,18 @@ class RecipeWaiter {
 
 
     /**
+     * Preserves Recipe state while an active Bake owns its captured target.
+     *
+     * @throws {RecipeTransactionError} When a Bake is active.
+     */
+    #requireBakeIdle() {
+        if (this.app.baking) {
+            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
+        }
+    }
+
+
+    /**
      * Publishes the visible state owned by a committed Agent Recipe transaction.
      *
      * @param {Object} result - Committed or unchanged transaction result.
@@ -730,9 +742,7 @@ class RecipeWaiter {
      * @returns {Object} Bounded transaction result.
      */
     revertAgentPatch() {
-        if (this.app.baking) {
-            throw new RecipeTransactionError(RECIPE_TRANSACTION_ERROR_CODE.BAKE_BUSY);
-        }
+        this.#requireBakeIdle();
 
         const result = this.transaction.revertAgentPatch();
         if (result.status === RECIPE_TRANSACTION_STATUS.COMMITTED) {
